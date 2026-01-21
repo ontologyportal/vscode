@@ -1,0 +1,122 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SUO-KIF",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.suo-kif",
+          "match": ";.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.suo-kif",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.suo-kif",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.logic.suo-kif",
+          "match": "\\b(not|and|or)\\b"
+        },
+        {
+          "name": "keyword.control.quantifier.suo-kif",
+          "match": "\\b(forall|exists)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.implication.suo-kif",
+          "match": "(=>|<=>)"
+        },
+        {
+          "name": "keyword.operator.comparison.suo-kif",
+          "match": "="
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.parameter.suo-kif",
+          "match": "\\?[a-zA-Z0-9_-]+"
+        },
+        {
+          "name": "variable.language.row.suo-kif",
+          "match": "@[a-zA-Z0-9_-]+"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.suo-kif",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.suo-kif",
+          "match": "[-+]?\\d+(\\.\\d+)?([eE][-+]?\\d+)?"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "comment": "Convention: Initial uppercase for functions, instances, classes ",
+          "name": "entity.name.class.suo-kif",
+          "match": "\\b[A-Z][a-zA-Z0-9_-]*\\b"
+        },
+        {
+          "comment": "Convention: Initial lowercase for relations ",
+          "name": "entity.name.function.suo-kif",
+          "match": "\\b[a-z][a-zA-Z0-9_-]*\\b"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.suo-kif"
+}
