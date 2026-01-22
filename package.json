@@ -1,6 +1,7 @@
 {
   "name": "suo-kif",
   "displayName": "SUO-KIF Support",
+  "icon": "extension-icon.svg",
   "description": "Syntax highlighting for Standard Upper Ontology Knowledge Interchange Format",
   "version": "1.0.0",
   "engines": {
@@ -9,7 +10,26 @@
   "categories": [
     "Programming Languages"
   ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:suo-kif"
+  ],
   "contributes": {
+    "commands": [
+      {
+        "command": "suo-kif.searchSymbol",
+        "title": "Search Symbol in Workspace"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "suo-kif.searchSymbol",
+          "when": "editorLangId == suo-kif",
+          "group": "navigation"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "suo-kif",
@@ -17,6 +37,10 @@
           "SUO-KIF",
           "KIF"
         ],
+        "icon": {
+            "light": "./kif-file-icon.svg",
+            "dark": "./kif-file-icon.svg"
+        },
         "extensions": [
           ".kif"
         ],

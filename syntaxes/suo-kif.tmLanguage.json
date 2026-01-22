@@ -66,7 +66,7 @@
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.implication.suo-kif",
+          "name": "keyword.control.logic.suo-kif",
           "match": "(=>|<=>)"
         },
         {
