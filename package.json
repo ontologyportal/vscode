@@ -19,6 +19,10 @@
       {
         "command": "suo-kif.searchSymbol",
         "title": "Search Symbol in Workspace"
+      },
+      {
+        "command": "suo-kif.showTaxonomy",
+        "title": "Show Class Taxonomy"
       }
     ],
     "menus": {
@@ -27,8 +31,23 @@
           "command": "suo-kif.searchSymbol",
           "when": "editorLangId == suo-kif",
           "group": "navigation"
+        },
+        {
+          "command": "suo-kif.showTaxonomy",
+          "when": "editorLangId == suo-kif",
+          "group": "navigation"
         }
       ]
+    },
+    "configuration": {
+      "title": "SUO-KIF",
+      "properties": {
+        "suo-kif.language": {
+          "type": "string",
+          "default": "EnglishLanguage",
+          "description": "The language to use for documentation strings (e.g. EnglishLanguage)."
+        }
+      }
     },
     "languages": [
       {
