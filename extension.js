@@ -1,16 +1,58 @@
 const vscode = require('vscode');
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const LOGIC_OPS = ['and', 'or', 'not', '=>', '<=>'];
 const QUANTIFIERS = ['forall', 'exists'];
+const DEFINING_RELATIONS = ['instance', 'subclass', 'subrelation', 'domain', 'domainSubclass', 'range', 'rangeSubclass', 'documentation', 'format', 'termFormat'];
 let symbolMetadata = {};
+let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
 
 function activate(context) {
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('suo-kif');
     context.subscriptions.push(diagnosticCollection);
 
-    // Register Search Command
+    // Register Commands
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.searchSymbol', searchSymbolCommand));
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.showTaxonomy', showTaxonomyCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.formatAxiom', formatAxiomCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.goToDefinition', goToDefinitionCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.browseInSigma', browseInSigmaCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.checkErrors', checkErrorsCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.queryProver', queryProverCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.generateTPTP', generateTPTPCommand));
+
+    // Build workspace definitions index on startup
+    buildWorkspaceDefinitions();
+
+    // Register Definition Provider for F12
+    context.subscriptions.push(
+        vscode.languages.registerDefinitionProvider('suo-kif', {
+            provideDefinition(document, position, token) {
+                return provideDefinition(document, position);
+            }
+        })
+    );
+
+    // Register Document Formatting Provider
+    context.subscriptions.push(
+        vscode.languages.registerDocumentFormattingEditProvider('suo-kif', {
+            provideDocumentFormattingEdits(document) {
+                return formatDocument(document);
+            }
+        })
+    );
+
+    // Register Selection Formatting Provider
+    context.subscriptions.push(
+        vscode.languages.registerDocumentRangeFormattingEditProvider('suo-kif', {
+            provideDocumentRangeFormattingEdits(document, range) {
+                return formatRange(document, range);
+            }
+        })
+    );
 
     const validate = (document) => {
         if (document.languageId !== 'suo-kif') return;
@@ -21,9 +63,14 @@ function activate(context) {
         const ast = parse(tokens, document, diagnostics);
         symbolMetadata = collectMetadata(ast);
 
+        // Enhanced validation
         ast.forEach(node => validateNode(node, diagnostics, symbolMetadata));
+        validateVariables(ast, diagnostics);
 
         diagnosticCollection.set(document.uri, diagnostics);
+
+        // Update definitions for this document
+        updateDocumentDefinitions(document);
     };
 
     context.subscriptions.push(
@@ -741,6 +788,1173 @@ function buildAncestorGraph(symbol, parentGraph) {
 
     // Edge case: if symbol has no parents, roots is empty.
     return { tree, roots };
+}
+
+// =====================================================
+// NEW FEATURES: Ported from SUMOjEdit Plugin
+// =====================================================
+
+/**
+ * Format Axiom Command - Reformats selected axiom with standard SUMO indentation
+ */
+async function formatAxiomCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+    let range = editor.selection;
+
+    // If no selection, try to find the enclosing S-expression
+    if (range.isEmpty) {
+        range = findEnclosingSExpression(document, editor.selection.active);
+        if (!range) {
+            vscode.window.showWarningMessage('Please select an axiom to format or place cursor inside an S-expression.');
+            return;
+        }
+    }
+
+    const text = document.getText(range);
+    const formatted = formatSExpression(text);
+
+    if (formatted !== text) {
+        await editor.edit(editBuilder => {
+            editBuilder.replace(range, formatted);
+        });
+    }
+}
+
+/**
+ * Find the enclosing S-expression at the given position
+ */
+function findEnclosingSExpression(document, position) {
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+
+    // Find matching parentheses
+    let start = -1;
+    let balance = 0;
+
+    // Search backwards for opening paren
+    for (let i = offset; i >= 0; i--) {
+        if (text[i] === ')') balance++;
+        else if (text[i] === '(') {
+            if (balance === 0) {
+                start = i;
+                break;
+            }
+            balance--;
+        }
+    }
+
+    if (start === -1) return null;
+
+    // Search forwards for closing paren
+    balance = 1;
+    for (let i = start + 1; i < text.length; i++) {
+        if (text[i] === '(') balance++;
+        else if (text[i] === ')') {
+            balance--;
+            if (balance === 0) {
+                return new vscode.Range(
+                    document.positionAt(start),
+                    document.positionAt(i + 1)
+                );
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Format an S-expression with standard SUMO indentation
+ */
+function formatSExpression(text) {
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const indentSize = config.get('formatIndentSize') || 2;
+
+    const tokens = tokenize(text);
+    if (tokens.length === 0) return text;
+
+    let result = '';
+    let indent = 0;
+    let prevToken = null;
+    let inQuantifierVars = false;
+    let parenStack = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        const nextToken = tokens[i + 1];
+
+        if (token.type === 'LPAREN') {
+            if (prevToken && prevToken.type !== 'LPAREN') {
+                result += '\n' + ' '.repeat(indent * indentSize);
+            }
+            result += '(';
+            parenStack.push({ indent, type: 'normal' });
+            indent++;
+
+            // Check if this is a quantifier with variable list
+            if (nextToken && nextToken.type === 'ATOM' && QUANTIFIERS.includes(nextToken.value)) {
+                parenStack[parenStack.length - 1].type = 'quantifier';
+            }
+        } else if (token.type === 'RPAREN') {
+            indent = Math.max(0, indent - 1);
+            if (parenStack.length > 0) parenStack.pop();
+            result += ')';
+        } else if (token.type === 'ATOM') {
+            if (prevToken) {
+                if (prevToken.type === 'LPAREN') {
+                    // Operator right after opening paren - no newline
+                    result += token.value;
+                } else if (prevToken.type === 'ATOM' || prevToken.type === 'RPAREN') {
+                    // Check if we're in a variable list for forall/exists
+                    const currentParen = parenStack[parenStack.length - 1];
+                    const parentParen = parenStack[parenStack.length - 2];
+
+                    if (parentParen && parentParen.type === 'quantifier' && currentParen) {
+                        // We're in the variable list - keep on same line
+                        result += ' ' + token.value;
+                    } else if (LOGIC_OPS.includes(getHeadAtPosition(tokens, i)) ||
+                               QUANTIFIERS.includes(getHeadAtPosition(tokens, i))) {
+                        // Arguments to logical operators go on new lines
+                        result += '\n' + ' '.repeat(indent * indentSize) + token.value;
+                    } else {
+                        // Regular arguments - stay on same line
+                        result += ' ' + token.value;
+                    }
+                }
+            } else {
+                result += token.value;
+            }
+        }
+
+        prevToken = token;
+    }
+
+    return result.trim();
+}
+
+/**
+ * Get the head atom of the current S-expression at token position
+ */
+function getHeadAtPosition(tokens, currentIndex) {
+    let balance = 0;
+    for (let i = currentIndex - 1; i >= 0; i--) {
+        if (tokens[i].type === 'RPAREN') balance++;
+        else if (tokens[i].type === 'LPAREN') {
+            if (balance === 0) {
+                // Found the opening paren, next should be head
+                if (i + 1 < tokens.length && tokens[i + 1].type === 'ATOM') {
+                    return tokens[i + 1].value;
+                }
+                return null;
+            }
+            balance--;
+        }
+    }
+    return null;
+}
+
+/**
+ * Format entire document
+ */
+function formatDocument(document) {
+    const text = document.getText();
+    const edits = [];
+
+    // Find all top-level S-expressions and format them
+    let i = 0;
+    while (i < text.length) {
+        // Skip whitespace and comments
+        while (i < text.length && /\s/.test(text[i])) i++;
+        if (i >= text.length) break;
+
+        if (text[i] === ';') {
+            while (i < text.length && text[i] !== '\n') i++;
+            continue;
+        }
+
+        if (text[i] === '(') {
+            const start = i;
+            let balance = 1;
+            i++;
+            while (i < text.length && balance > 0) {
+                if (text[i] === '(') balance++;
+                else if (text[i] === ')') balance--;
+                else if (text[i] === '"') {
+                    i++;
+                    while (i < text.length && text[i] !== '"') {
+                        if (text[i] === '\\') i++;
+                        i++;
+                    }
+                } else if (text[i] === ';') {
+                    while (i < text.length && text[i] !== '\n') i++;
+                    continue;
+                }
+                i++;
+            }
+            const end = i;
+            const expr = text.substring(start, end);
+            const formatted = formatSExpression(expr);
+
+            if (formatted !== expr) {
+                edits.push(vscode.TextEdit.replace(
+                    new vscode.Range(document.positionAt(start), document.positionAt(end)),
+                    formatted
+                ));
+            }
+        } else {
+            i++;
+        }
+    }
+
+    return edits;
+}
+
+/**
+ * Format a range of the document
+ */
+function formatRange(document, range) {
+    const text = document.getText(range);
+    const formatted = formatSExpression(text);
+
+    if (formatted !== text) {
+        return [vscode.TextEdit.replace(range, formatted)];
+    }
+    return [];
+}
+
+/**
+ * Go to Definition Command
+ */
+async function goToDefinitionCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+    const position = editor.selection.active;
+    const wordRange = document.getWordRangeAtPosition(position);
+    if (!wordRange) return;
+
+    const symbol = document.getText(wordRange);
+    const definitions = await findDefinitions(symbol);
+
+    if (definitions.length === 0) {
+        vscode.window.showInformationMessage(`No definition found for '${symbol}'.`);
+        return;
+    }
+
+    if (definitions.length === 1) {
+        const def = definitions[0];
+        const doc = await vscode.workspace.openTextDocument(def.uri);
+        const editor = await vscode.window.showTextDocument(doc);
+        editor.selection = new vscode.Selection(def.range.start, def.range.end);
+        editor.revealRange(def.range, vscode.TextEditorRevealType.InCenter);
+    } else {
+        // Multiple definitions - show quick pick
+        const items = definitions.map(def => ({
+            label: `${def.type}: ${symbol}`,
+            description: vscode.workspace.asRelativePath(def.uri),
+            detail: def.context,
+            definition: def
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: `Multiple definitions found for '${symbol}'`
+        });
+
+        if (selected) {
+            const def = selected.definition;
+            const doc = await vscode.workspace.openTextDocument(def.uri);
+            const editor = await vscode.window.showTextDocument(doc);
+            editor.selection = new vscode.Selection(def.range.start, def.range.end);
+            editor.revealRange(def.range, vscode.TextEditorRevealType.InCenter);
+        }
+    }
+}
+
+/**
+ * Definition Provider for F12 functionality
+ */
+async function provideDefinition(document, position) {
+    const wordRange = document.getWordRangeAtPosition(position);
+    if (!wordRange) return null;
+
+    const symbol = document.getText(wordRange);
+    const definitions = await findDefinitions(symbol);
+
+    return definitions.map(def => new vscode.Location(def.uri, def.range));
+}
+
+/**
+ * Find all definitions of a symbol in the workspace
+ */
+async function findDefinitions(symbol) {
+    const definitions = [];
+    const files = await vscode.workspace.findFiles('**/*.kif');
+
+    // Skip variables
+    if (symbol.startsWith('?') || symbol.startsWith('@')) {
+        return definitions;
+    }
+
+    for (const file of files) {
+        const doc = await vscode.workspace.openTextDocument(file);
+        const text = doc.getText();
+
+        // Fast check
+        if (!text.includes(symbol)) continue;
+
+        // Look for defining relations
+        for (const rel of DEFINING_RELATIONS) {
+            // Pattern: (relation symbol ...) where symbol is second argument
+            const pattern = new RegExp(
+                `\\(\\s*${rel}\\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s`,
+                'g'
+            );
+
+            let match;
+            while ((match = pattern.exec(text)) !== null) {
+                const startOffset = match.index;
+                const symbolStart = text.indexOf(symbol, startOffset + rel.length + 2);
+                const lineNum = doc.positionAt(symbolStart).line;
+                const line = doc.lineAt(lineNum).text;
+
+                definitions.push({
+                    uri: file,
+                    range: new vscode.Range(
+                        doc.positionAt(symbolStart),
+                        doc.positionAt(symbolStart + symbol.length)
+                    ),
+                    type: rel,
+                    context: line.trim()
+                });
+            }
+        }
+
+        // Also check for (subclass X Parent) pattern
+        const subclassPattern = new RegExp(
+            `\\(\\s*subclass\\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s+([^\\s\\)]+)`,
+            'g'
+        );
+        let match;
+        while ((match = subclassPattern.exec(text)) !== null) {
+            const startOffset = match.index;
+            const symbolStart = text.indexOf(symbol, startOffset + 10);
+            const lineNum = doc.positionAt(symbolStart).line;
+            const line = doc.lineAt(lineNum).text;
+
+            // Avoid duplicates
+            const exists = definitions.some(d =>
+                d.uri.fsPath === file.fsPath &&
+                d.range.start.line === lineNum &&
+                d.type === 'subclass'
+            );
+            if (!exists) {
+                definitions.push({
+                    uri: file,
+                    range: new vscode.Range(
+                        doc.positionAt(symbolStart),
+                        doc.positionAt(symbolStart + symbol.length)
+                    ),
+                    type: 'subclass',
+                    context: line.trim()
+                });
+            }
+        }
+    }
+
+    // Prioritize instance and subclass definitions
+    definitions.sort((a, b) => {
+        const priority = ['instance', 'subclass', 'subrelation', 'domain', 'documentation'];
+        return priority.indexOf(a.type) - priority.indexOf(b.type);
+    });
+
+    return definitions;
+}
+
+/**
+ * Browse Term in Sigma Command
+ */
+async function browseInSigmaCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+    const position = editor.selection.active;
+    const wordRange = document.getWordRangeAtPosition(position);
+
+    if (!wordRange) {
+        vscode.window.showWarningMessage('Please place cursor on a term to browse.');
+        return;
+    }
+
+    const symbol = document.getText(wordRange);
+
+    // Skip variables
+    if (symbol.startsWith('?') || symbol.startsWith('@')) {
+        vscode.window.showWarningMessage('Cannot browse variables in Sigma.');
+        return;
+    }
+
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const sigmaUrl = config.get('sigmaUrl') || 'http://sigma.ontologyportal.org:8080/sigma/Browse.jsp';
+    const kb = config.get('knowledgeBase') || 'SUMO';
+    const lang = config.get('language') || 'EnglishLanguage';
+
+    const url = `${sigmaUrl}?kb=${encodeURIComponent(kb)}&lang=${encodeURIComponent(lang)}&flang=SUO-KIF&term=${encodeURIComponent(symbol)}`;
+
+    vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+/**
+ * Check Errors Command - Enhanced error checking
+ */
+async function checkErrorsCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+
+    // Force re-validation with enhanced checks
+    const diagnostics = [];
+    const text = document.getText();
+    const tokens = tokenize(text);
+    const ast = parse(tokens, document, diagnostics);
+    const metadata = collectMetadata(ast);
+
+    // Run all validations
+    ast.forEach(node => validateNode(node, diagnostics, metadata));
+    validateVariables(ast, diagnostics);
+    validateArity(ast, diagnostics, metadata);
+    validateRelationUsage(ast, diagnostics, metadata);
+
+    const collection = vscode.languages.createDiagnosticCollection('suo-kif-check');
+    collection.set(document.uri, diagnostics);
+
+    if (diagnostics.length === 0) {
+        vscode.window.showInformationMessage('No errors found in the current file.');
+    } else {
+        vscode.window.showWarningMessage(`Found ${diagnostics.length} issue(s). See Problems panel for details.`);
+    }
+}
+
+/**
+ * Validate variable usage - check for undefined/unused variables
+ */
+function validateVariables(ast, diagnostics) {
+    const visit = (node, scope = new Set(), quantifierVars = new Set()) => {
+        if (node.type === 'list' && node.children.length > 0) {
+            const head = node.children[0];
+
+            if (head.type === 'atom' && QUANTIFIERS.includes(head.value)) {
+                // This is a quantified expression
+                if (node.children.length >= 2 && node.children[1].type === 'list') {
+                    const varList = node.children[1];
+                    const newScope = new Set(scope);
+
+                    // Add quantified variables to scope
+                    varList.children.forEach(v => {
+                        if (v.type === 'atom' && (v.value.startsWith('?') || v.value.startsWith('@'))) {
+                            newScope.add(v.value);
+                        }
+                    });
+
+                    // Validate the body with extended scope
+                    for (let i = 2; i < node.children.length; i++) {
+                        visit(node.children[i], newScope, quantifierVars);
+                    }
+                    return;
+                }
+            }
+
+            // Check all children
+            node.children.forEach(child => visit(child, scope, quantifierVars));
+        } else if (node.type === 'atom') {
+            const val = node.value;
+            if ((val.startsWith('?') || val.startsWith('@')) && !scope.has(val)) {
+                // Free variable - this is allowed but we can inform
+                // In SUO-KIF, free variables are implicitly universally quantified
+            }
+        }
+    };
+
+    ast.forEach(node => visit(node));
+}
+
+/**
+ * Validate arity based on domain declarations
+ */
+function validateArity(ast, diagnostics, metadata) {
+    const visit = (node) => {
+        if (node.type === 'list' && node.children.length > 0) {
+            const head = node.children[0];
+
+            if (head.type === 'atom' && metadata[head.value] && metadata[head.value].domains) {
+                const domains = metadata[head.value].domains;
+                const maxArg = Math.max(...Object.keys(domains).map(k => parseInt(k)));
+                const actualArgs = node.children.length - 1;
+
+                if (actualArgs < maxArg) {
+                    diagnostics.push(new vscode.Diagnostic(
+                        node.range,
+                        `Relation '${head.value}' expects at least ${maxArg} arguments, but got ${actualArgs}.`,
+                        vscode.DiagnosticSeverity.Warning
+                    ));
+                }
+            }
+
+            node.children.forEach(visit);
+        }
+    };
+
+    ast.forEach(visit);
+}
+
+/**
+ * Validate relation usage patterns
+ */
+function validateRelationUsage(ast, diagnostics, metadata) {
+    const visit = (node) => {
+        if (node.type === 'list' && node.children.length > 0) {
+            const head = node.children[0];
+
+            // Check for empty lists
+            if (node.children.length === 1 && head.type === 'atom' && !LOGIC_OPS.includes(head.value)) {
+                diagnostics.push(new vscode.Diagnostic(
+                    node.range,
+                    `Relation '${head.value}' has no arguments.`,
+                    vscode.DiagnosticSeverity.Warning
+                ));
+            }
+
+            node.children.forEach(visit);
+        }
+    };
+
+    ast.forEach(visit);
+}
+
+/**
+ * Query Theorem Prover Command
+ */
+async function queryProverCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+    let range = editor.selection;
+
+    // If no selection, try to find enclosing S-expression
+    if (range.isEmpty) {
+        range = findEnclosingSExpression(document, editor.selection.active);
+        if (!range) {
+            vscode.window.showWarningMessage('Please select an axiom to query.');
+            return;
+        }
+    }
+
+    const query = document.getText(range);
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const proverPath = config.get('proverPath');
+    const proverType = config.get('proverType') || 'vampire';
+    const timeout = config.get('proverTimeout') || 30;
+
+    if (!proverPath) {
+        const configure = await vscode.window.showErrorMessage(
+            'Theorem prover path not configured. Please set suo-kif.proverPath in settings.',
+            'Open Settings'
+        );
+        if (configure === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.proverPath');
+        }
+        return;
+    }
+
+    // Check if prover exists
+    if (!fs.existsSync(proverPath)) {
+        vscode.window.showErrorMessage(`Theorem prover not found at: ${proverPath}`);
+        return;
+    }
+
+    // Convert SUO-KIF to TPTP format
+    const tptpQuery = convertToTPTP(query);
+
+    // Create temp file for query
+    const tempDir = os.tmpdir();
+    const tempFile = path.join(tempDir, `suokif-query-${Date.now()}.p`);
+
+    // Get all KIF files for context
+    const files = await vscode.workspace.findFiles('**/*.kif');
+    let context = '';
+
+    for (const file of files) {
+        if (file.fsPath !== document.uri.fsPath) {
+            const doc = await vscode.workspace.openTextDocument(file);
+            context += doc.getText() + '\n';
+        }
+    }
+
+    // Add current file content (except the query)
+    const fullText = document.getText();
+    const queryStart = document.offsetAt(range.start);
+    const queryEnd = document.offsetAt(range.end);
+    context += fullText.substring(0, queryStart) + fullText.substring(queryEnd);
+
+    // Convert context to TPTP
+    const tptpContext = convertKBToTPTP(context);
+    const fullTPTP = tptpContext + '\n' + tptpQuery;
+
+    fs.writeFileSync(tempFile, fullTPTP);
+
+    // Show progress
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'Running theorem prover...',
+        cancellable: true
+    }, async (progress, token) => {
+        return new Promise((resolve, reject) => {
+            let cmd;
+            if (proverType === 'vampire') {
+                cmd = `"${proverPath}" --mode casc -t ${timeout} "${tempFile}"`;
+            } else {
+                cmd = `"${proverPath}" --auto --cpu-limit=${timeout} "${tempFile}"`;
+            }
+
+            const proc = exec(cmd, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+                // Clean up temp file
+                try { fs.unlinkSync(tempFile); } catch (e) {}
+
+                if (token.isCancellationRequested) {
+                    resolve();
+                    return;
+                }
+
+                // Create output panel
+                const outputChannel = vscode.window.createOutputChannel('SUO-KIF Prover');
+                outputChannel.clear();
+                outputChannel.appendLine(`Query: ${query}`);
+                outputChannel.appendLine('='.repeat(60));
+                outputChannel.appendLine('');
+
+                if (error && !stdout) {
+                    outputChannel.appendLine('Error running prover:');
+                    outputChannel.appendLine(stderr || error.message);
+                } else {
+                    outputChannel.appendLine('Prover Output:');
+                    outputChannel.appendLine(stdout);
+                    if (stderr) {
+                        outputChannel.appendLine('\nStderr:');
+                        outputChannel.appendLine(stderr);
+                    }
+
+                    // Parse result
+                    if (stdout.includes('Theorem') || stdout.includes('SZS status Theorem')) {
+                        vscode.window.showInformationMessage('Theorem proved!');
+                    } else if (stdout.includes('CounterSatisfiable') || stdout.includes('SZS status CounterSatisfiable')) {
+                        vscode.window.showWarningMessage('Counter-satisfiable (theorem cannot be proved).');
+                    } else if (stdout.includes('Timeout') || stdout.includes('SZS status Timeout')) {
+                        vscode.window.showWarningMessage('Prover timed out.');
+                    } else if (stdout.includes('Unsatisfiable') || stdout.includes('SZS status Unsatisfiable')) {
+                        vscode.window.showInformationMessage('Unsatisfiable (negation is a theorem).');
+                    }
+                }
+
+                outputChannel.show();
+                resolve();
+            });
+
+            token.onCancellationRequested(() => {
+                proc.kill();
+            });
+        });
+    });
+}
+
+/**
+ * Generate TPTP File Command - Opens TPTP conversion in new editor pane
+ */
+async function generateTPTPCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+
+    // Offer options for what to convert
+    const options = [
+        { label: 'Current File', description: 'Convert the current file to TPTP' },
+        { label: 'Entire Workspace', description: 'Convert all .kif files in workspace to TPTP' },
+        { label: 'Selection Only', description: 'Convert selected text to TPTP' }
+    ];
+
+    const selected = await vscode.window.showQuickPick(options, {
+        placeHolder: 'What would you like to convert to TPTP?'
+    });
+
+    if (!selected) return;
+
+    let kifContent = '';
+    let sourceName = '';
+
+    if (selected.label === 'Current File') {
+        kifContent = document.getText();
+        sourceName = path.basename(document.fileName, '.kif');
+    } else if (selected.label === 'Entire Workspace') {
+        const files = await vscode.workspace.findFiles('**/*.kif');
+        if (files.length === 0) {
+            vscode.window.showWarningMessage('No .kif files found in workspace.');
+            return;
+        }
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Generating TPTP...',
+            cancellable: false
+        }, async (progress) => {
+            for (let i = 0; i < files.length; i++) {
+                progress.report({ message: `Processing ${i + 1}/${files.length} files...` });
+                const doc = await vscode.workspace.openTextDocument(files[i]);
+                kifContent += `% File: ${vscode.workspace.asRelativePath(files[i])}\n`;
+                kifContent += doc.getText() + '\n\n';
+            }
+        });
+
+        sourceName = 'workspace';
+    } else if (selected.label === 'Selection Only') {
+        if (editor.selection.isEmpty) {
+            vscode.window.showWarningMessage('No text selected.');
+            return;
+        }
+        kifContent = document.getText(editor.selection);
+        sourceName = path.basename(document.fileName, '.kif') + '-selection';
+    }
+
+    // Convert to TPTP
+    const tptpContent = convertKBToTPTPWithComments(kifContent, sourceName);
+
+    // Open as untitled document
+    const tptpDoc = await vscode.workspace.openTextDocument({
+        content: tptpContent,
+        language: 'tptp'  // Will use plaintext if TPTP language not installed
+    });
+
+    await vscode.window.showTextDocument(tptpDoc, vscode.ViewColumn.Beside);
+    vscode.window.showInformationMessage(`TPTP file generated. Use File > Save As to save it.`);
+}
+
+/**
+ * Convert a knowledge base to TPTP format with header comments
+ */
+function convertKBToTPTPWithComments(kifText, sourceName) {
+    const header = `% TPTP Translation of SUO-KIF Knowledge Base
+% Source: ${sourceName}
+% Generated: ${new Date().toISOString()}
+% Generator: SUO-KIF VSCode Extension
+%
+% Note: This is an automated translation. Some constructs may need
+% manual adjustment for use with specific theorem provers.
+%
+% ============================================================
+
+`;
+
+    const tokens = tokenize(kifText);
+    const mockDoc = { getText: () => kifText, positionAt: () => ({ line: 0, character: 0 }) };
+    const ast = parse(tokens, mockDoc, []);
+
+    let axiomNum = 0;
+    const lines = [];
+    const skipped = [];
+
+    const convertNode = (node, isTopLevel = false) => {
+        if (node.type === 'atom') {
+            let val = node.value;
+            // Handle strings - escape or convert
+            if (val.startsWith('"') && val.endsWith('"')) {
+                // Convert string to a constant
+                const inner = val.slice(1, -1).replace(/[^a-zA-Z0-9]/g, '_');
+                return `str_${inner.substring(0, 50)}`;
+            }
+            // Convert variables
+            if (val.startsWith('?')) {
+                return val.substring(1).toUpperCase();
+            }
+            if (val.startsWith('@')) {
+                // Row variables - convert to regular variable with warning
+                return val.substring(1).toUpperCase() + '_ROW';
+            }
+            // Convert constants - must start with lowercase in TPTP for functions/constants
+            // Relations/predicates can be lowercase
+            if (/^[A-Z]/.test(val)) {
+                // Make first letter lowercase for TPTP
+                return val.charAt(0).toLowerCase() + val.slice(1);
+            }
+            // Handle special characters in names
+            return val.replace(/[^a-zA-Z0-9_]/g, '_');
+        }
+
+        if (node.type === 'list' && node.children.length > 0) {
+            const head = node.children[0];
+            if (head.type !== 'atom') return null;
+
+            const op = head.value;
+            const args = node.children.slice(1).map(c => convertNode(c, false)).filter(x => x !== null);
+
+            switch (op) {
+                case 'and':
+                    if (args.length === 0) return '$true';
+                    if (args.length === 1) return args[0];
+                    return '(' + args.join(' & ') + ')';
+                case 'or':
+                    if (args.length === 0) return '$false';
+                    if (args.length === 1) return args[0];
+                    return '(' + args.join(' | ') + ')';
+                case 'not':
+                    if (args.length === 0) return null;
+                    return '(~ ' + args[0] + ')';
+                case '=>':
+                    if (args.length < 2) return null;
+                    return '(' + args[0] + ' => ' + args[1] + ')';
+                case '<=>':
+                    if (args.length < 2) return null;
+                    return '(' + args[0] + ' <=> ' + args[1] + ')';
+                case 'forall':
+                    if (node.children.length >= 3 && node.children[1].type === 'list') {
+                        const vars = node.children[1].children
+                            .filter(v => v.type === 'atom')
+                            .map(v => {
+                                const name = v.value;
+                                if (name.startsWith('?')) return name.substring(1).toUpperCase();
+                                if (name.startsWith('@')) return name.substring(1).toUpperCase() + '_ROW';
+                                return name.toUpperCase();
+                            });
+                        const body = convertNode(node.children[2], false);
+                        if (!body) return null;
+                        if (vars.length === 0) return body;
+                        return '(! [' + vars.join(', ') + '] : ' + body + ')';
+                    }
+                    return null;
+                case 'exists':
+                    if (node.children.length >= 3 && node.children[1].type === 'list') {
+                        const vars = node.children[1].children
+                            .filter(v => v.type === 'atom')
+                            .map(v => {
+                                const name = v.value;
+                                if (name.startsWith('?')) return name.substring(1).toUpperCase();
+                                if (name.startsWith('@')) return name.substring(1).toUpperCase() + '_ROW';
+                                return name.toUpperCase();
+                            });
+                        const body = convertNode(node.children[2], false);
+                        if (!body) return null;
+                        if (vars.length === 0) return body;
+                        return '(? [' + vars.join(', ') + '] : ' + body + ')';
+                    }
+                    return null;
+                case '=':
+                    if (args.length < 2) return null;
+                    return '(' + args[0] + ' = ' + args[1] + ')';
+                case 'documentation':
+                case 'format':
+                case 'termFormat':
+                    // Skip documentation - return special marker
+                    return null;
+                default:
+                    // Relation/function application
+                    // TPTP predicates should be lowercase
+                    let relName = op;
+                    if (/^[A-Z]/.test(relName)) {
+                        relName = relName.charAt(0).toLowerCase() + relName.slice(1);
+                    }
+                    relName = relName.replace(/[^a-zA-Z0-9_]/g, '_');
+
+                    if (args.length === 0) {
+                        // Propositional constant or nullary predicate
+                        return relName;
+                    }
+                    return relName + '(' + args.join(', ') + ')';
+            }
+        }
+
+        return null;
+    };
+
+    ast.forEach((node, index) => {
+        try {
+            const tptp = convertNode(node, true);
+            if (tptp && tptp !== 'null') {
+                // Try to extract a meaningful name from the axiom
+                let axiomName = `axiom_${++axiomNum}`;
+
+                // Check if it's a specific type of statement for better naming
+                if (node.type === 'list' && node.children.length > 0) {
+                    const head = node.children[0];
+                    if (head.type === 'atom') {
+                        const headVal = head.value;
+                        if (headVal === 'subclass' && node.children.length >= 3) {
+                            const child = node.children[1];
+                            if (child.type === 'atom') {
+                                axiomName = `subclass_${child.value.toLowerCase()}_${axiomNum}`;
+                            }
+                        } else if (headVal === 'instance' && node.children.length >= 3) {
+                            const inst = node.children[1];
+                            if (inst.type === 'atom') {
+                                axiomName = `instance_${inst.value.toLowerCase()}_${axiomNum}`;
+                            }
+                        } else if (headVal === '=>') {
+                            axiomName = `rule_${axiomNum}`;
+                        } else if (headVal === '<=>') {
+                            axiomName = `equivalence_${axiomNum}`;
+                        }
+                    }
+                }
+
+                // Sanitize axiom name
+                axiomName = axiomName.replace(/[^a-zA-Z0-9_]/g, '_');
+
+                lines.push(`fof(${axiomName}, axiom, ${tptp}).`);
+            }
+        } catch (e) {
+            skipped.push(`% Skipped expression at index ${index}: ${e.message}`);
+        }
+    });
+
+    let footer = '';
+    if (skipped.length > 0) {
+        footer = `\n% ============================================================\n% Skipped expressions:\n${skipped.join('\n')}\n`;
+    }
+
+    const stats = `
+% ============================================================
+% Statistics:
+%   Total axioms generated: ${lines.length}
+%   Expressions skipped: ${skipped.length}
+% ============================================================
+
+`;
+
+    return header + stats + lines.join('\n') + footer;
+}
+
+/**
+ * Convert a single SUO-KIF expression to TPTP format
+ */
+function convertToTPTP(kifExpr) {
+    // Basic conversion - this is simplified
+    // A full implementation would need proper parsing
+    const tokens = tokenize(kifExpr);
+    const ast = parse(tokens, { getText: () => kifExpr, positionAt: () => ({ line: 0, character: 0 }) }, []);
+
+    if (ast.length === 0) return '';
+
+    const convertNode = (node) => {
+        if (node.type === 'atom') {
+            let val = node.value;
+            // Convert variables
+            if (val.startsWith('?')) {
+                return val.substring(1).toUpperCase();
+            }
+            if (val.startsWith('@')) {
+                return val.substring(1).toUpperCase();
+            }
+            // Convert constants (lowercase in TPTP)
+            if (/^[A-Z]/.test(val)) {
+                return val.toLowerCase();
+            }
+            return val;
+        }
+
+        if (node.type === 'list' && node.children.length > 0) {
+            const head = node.children[0];
+            if (head.type !== 'atom') return '';
+
+            const op = head.value;
+            const args = node.children.slice(1).map(convertNode);
+
+            switch (op) {
+                case 'and':
+                    return '(' + args.join(' & ') + ')';
+                case 'or':
+                    return '(' + args.join(' | ') + ')';
+                case 'not':
+                    return '~(' + args[0] + ')';
+                case '=>':
+                    return '(' + args[0] + ' => ' + args[1] + ')';
+                case '<=>':
+                    return '(' + args[0] + ' <=> ' + args[1] + ')';
+                case 'forall':
+                    if (node.children.length >= 3 && node.children[1].type === 'list') {
+                        const vars = node.children[1].children
+                            .filter(v => v.type === 'atom')
+                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
+                        const body = convertNode(node.children[2]);
+                        return '(![' + vars.join(',') + ']: ' + body + ')';
+                    }
+                    return '';
+                case 'exists':
+                    if (node.children.length >= 3 && node.children[1].type === 'list') {
+                        const vars = node.children[1].children
+                            .filter(v => v.type === 'atom')
+                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
+                        const body = convertNode(node.children[2]);
+                        return '(?[' + vars.join(',') + ']: ' + body + ')';
+                    }
+                    return '';
+                case '=':
+                    return '(' + args[0] + ' = ' + args[1] + ')';
+                default:
+                    // Relation application
+                    const relName = /^[A-Z]/.test(op) ? op.toLowerCase() : op;
+                    return relName + '(' + args.join(',') + ')';
+            }
+        }
+
+        return '';
+    };
+
+    const tptp = convertNode(ast[0]);
+    return `fof(query, conjecture, ${tptp}).`;
+}
+
+/**
+ * Convert a knowledge base to TPTP format
+ */
+function convertKBToTPTP(kifText) {
+    const tokens = tokenize(kifText);
+    const ast = parse(tokens, { getText: () => kifText, positionAt: () => ({ line: 0, character: 0 }) }, []);
+
+    let axiomNum = 0;
+    const lines = [];
+
+    const convertNode = (node) => {
+        if (node.type === 'atom') {
+            let val = node.value;
+            if (val.startsWith('?')) return val.substring(1).toUpperCase();
+            if (val.startsWith('@')) return val.substring(1).toUpperCase();
+            if (/^[A-Z]/.test(val)) return val.toLowerCase();
+            return val;
+        }
+
+        if (node.type === 'list' && node.children.length > 0) {
+            const head = node.children[0];
+            if (head.type !== 'atom') return '';
+
+            const op = head.value;
+            const args = node.children.slice(1).map(convertNode);
+
+            switch (op) {
+                case 'and':
+                    return '(' + args.join(' & ') + ')';
+                case 'or':
+                    return '(' + args.join(' | ') + ')';
+                case 'not':
+                    return '~(' + args[0] + ')';
+                case '=>':
+                    return '(' + args[0] + ' => ' + args[1] + ')';
+                case '<=>':
+                    return '(' + args[0] + ' <=> ' + args[1] + ')';
+                case 'forall':
+                    if (node.children.length >= 3 && node.children[1].type === 'list') {
+                        const vars = node.children[1].children
+                            .filter(v => v.type === 'atom')
+                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
+                        const body = convertNode(node.children[2]);
+                        return '(![' + vars.join(',') + ']: ' + body + ')';
+                    }
+                    return '';
+                case 'exists':
+                    if (node.children.length >= 3 && node.children[1].type === 'list') {
+                        const vars = node.children[1].children
+                            .filter(v => v.type === 'atom')
+                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
+                        const body = convertNode(node.children[2]);
+                        return '(?[' + vars.join(',') + ']: ' + body + ')';
+                    }
+                    return '';
+                case '=':
+                    return '(' + args[0] + ' = ' + args[1] + ')';
+                case 'documentation':
+                case 'format':
+                case 'termFormat':
+                    // Skip documentation
+                    return null;
+                default:
+                    const relName = /^[A-Z]/.test(op) ? op.toLowerCase() : op;
+                    return relName + '(' + args.join(',') + ')';
+            }
+        }
+
+        return '';
+    };
+
+    ast.forEach(node => {
+        const tptp = convertNode(node);
+        if (tptp && tptp !== 'null') {
+            lines.push(`fof(axiom${++axiomNum}, axiom, ${tptp}).`);
+        }
+    });
+
+    return lines.join('\n');
+}
+
+/**
+ * Build workspace definitions index
+ */
+async function buildWorkspaceDefinitions() {
+    workspaceDefinitions = {};
+
+    const files = await vscode.workspace.findFiles('**/*.kif');
+
+    for (const file of files) {
+        try {
+            const doc = await vscode.workspace.openTextDocument(file);
+            updateDocumentDefinitions(doc);
+        } catch (e) {
+            // Ignore errors reading files
+        }
+    }
+}
+
+/**
+ * Update definitions for a specific document
+ */
+function updateDocumentDefinitions(document) {
+    const text = document.getText();
+    const uri = document.uri.fsPath;
+
+    // Remove old definitions from this file
+    for (const sym of Object.keys(workspaceDefinitions)) {
+        workspaceDefinitions[sym] = workspaceDefinitions[sym].filter(d => d.file !== uri);
+        if (workspaceDefinitions[sym].length === 0) {
+            delete workspaceDefinitions[sym];
+        }
+    }
+
+    // Add new definitions
+    for (const rel of DEFINING_RELATIONS) {
+        const pattern = new RegExp(
+            `\\(\\s*${rel}\\s+([^?\\s\\)][^\\s\\)]*)\\s`,
+            'g'
+        );
+
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const symbol = match[1];
+            const startOffset = match.index;
+            const lineNum = document.positionAt(startOffset).line;
+
+            if (!workspaceDefinitions[symbol]) {
+                workspaceDefinitions[symbol] = [];
+            }
+
+            workspaceDefinitions[symbol].push({
+                file: uri,
+                line: lineNum,
+                type: rel,
+                context: document.lineAt(lineNum).text.trim()
+            });
+        }
+    }
 }
 
 module.exports = { activate, deactivate };

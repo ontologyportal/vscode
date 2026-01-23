@@ -2,13 +2,15 @@
   "name": "suo-kif",
   "displayName": "SUO-KIF Support",
   "icon": "extension-icon.svg",
-  "description": "Syntax highlighting for Standard Upper Ontology Knowledge Interchange Format",
-  "version": "1.0.0",
+  "description": "Full-featured SUO-KIF/SUMO development environment for VSCode",
+  "version": "2.0.0",
   "engines": {
     "vscode": "^1.70.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Formatters",
+    "Linters"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -18,11 +20,55 @@
     "commands": [
       {
         "command": "suo-kif.searchSymbol",
-        "title": "Search Symbol in Workspace"
+        "title": "SUO-KIF: Search Symbol in Workspace"
       },
       {
         "command": "suo-kif.showTaxonomy",
-        "title": "Show Class Taxonomy"
+        "title": "SUO-KIF: Show Class Taxonomy"
+      },
+      {
+        "command": "suo-kif.formatAxiom",
+        "title": "SUO-KIF: Format Axiom"
+      },
+      {
+        "command": "suo-kif.goToDefinition",
+        "title": "SUO-KIF: Go to Definition"
+      },
+      {
+        "command": "suo-kif.browseInSigma",
+        "title": "SUO-KIF: Browse Term in Sigma"
+      },
+      {
+        "command": "suo-kif.checkErrors",
+        "title": "SUO-KIF: Check for Errors"
+      },
+      {
+        "command": "suo-kif.queryProver",
+        "title": "SUO-KIF: Query with Theorem Prover"
+      },
+      {
+        "command": "suo-kif.generateTPTP",
+        "title": "SUO-KIF: Generate TPTP File"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "suo-kif.formatAxiom",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorLangId == suo-kif && editorHasSelection"
+      },
+      {
+        "command": "suo-kif.goToDefinition",
+        "key": "f12",
+        "mac": "f12",
+        "when": "editorLangId == suo-kif"
+      },
+      {
+        "command": "suo-kif.browseInSigma",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorLangId == suo-kif"
       }
     ],
     "menus": {
@@ -30,12 +76,42 @@
         {
           "command": "suo-kif.searchSymbol",
           "when": "editorLangId == suo-kif",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "suo-kif.goToDefinition",
+          "when": "editorLangId == suo-kif",
+          "group": "navigation@2"
         },
         {
           "command": "suo-kif.showTaxonomy",
           "when": "editorLangId == suo-kif",
-          "group": "navigation"
+          "group": "navigation@3"
+        },
+        {
+          "command": "suo-kif.browseInSigma",
+          "when": "editorLangId == suo-kif",
+          "group": "navigation@4"
+        },
+        {
+          "command": "suo-kif.formatAxiom",
+          "when": "editorLangId == suo-kif && editorHasSelection",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "suo-kif.checkErrors",
+          "when": "editorLangId == suo-kif",
+          "group": "1_modification@2"
+        },
+        {
+          "command": "suo-kif.queryProver",
+          "when": "editorLangId == suo-kif && editorHasSelection",
+          "group": "1_modification@3"
+        },
+        {
+          "command": "suo-kif.generateTPTP",
+          "when": "editorLangId == suo-kif",
+          "group": "1_modification@4"
         }
       ]
     },
@@ -46,6 +122,37 @@
           "type": "string",
           "default": "EnglishLanguage",
           "description": "The language to use for documentation strings (e.g. EnglishLanguage)."
+        },
+        "suo-kif.sigmaUrl": {
+          "type": "string",
+          "default": "http://sigma.ontologyportal.org:8080/sigma/Browse.jsp",
+          "description": "URL of the Sigma KB browser."
+        },
+        "suo-kif.knowledgeBase": {
+          "type": "string",
+          "default": "SUMO",
+          "description": "Knowledge base to use in Sigma browser (e.g., SUMO)."
+        },
+        "suo-kif.proverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to theorem prover executable (Vampire or E-Prover)."
+        },
+        "suo-kif.proverType": {
+          "type": "string",
+          "enum": ["vampire", "eprover"],
+          "default": "vampire",
+          "description": "Type of theorem prover to use."
+        },
+        "suo-kif.proverTimeout": {
+          "type": "number",
+          "default": 30,
+          "description": "Timeout in seconds for theorem prover queries."
+        },
+        "suo-kif.formatIndentSize": {
+          "type": "number",
+          "default": 2,
+          "description": "Number of spaces for each indentation level when formatting."
         }
       }
     },
