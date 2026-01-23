@@ -1,9 +1,15 @@
 {
   "name": "suo-kif",
   "displayName": "SUO-KIF Support",
-  "icon": "extension-icon.svg",
+  "icon": "extension-icon.png",
   "description": "Full-featured SUO-KIF/SUMO development environment for VSCode",
   "version": "2.0.0",
+  "publisher": "ontologyportal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ontologyportal/vscode"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -164,8 +170,8 @@
           "KIF"
         ],
         "icon": {
-            "light": "./kif-file-icon.svg",
-            "dark": "./kif-file-icon.svg"
+            "light": "./kif-file-icon.png",
+            "dark": "./kif-file-icon.png"
         },
         "extensions": [
           ".kif"
