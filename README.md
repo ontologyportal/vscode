@@ -1,163 +1,86 @@
 # SUO-KIF VSCode Language Support
 
-A full-featured development environment for SUO-KIF (Standard Upper Ontology Knowledge Interchange Format) in Visual Studio Code. This extension provides comprehensive support for working with SUMO ontology files, including all features from the JEdit SUMO plugin and more.
+A full-featured development environment for SUO-KIF (Standard Upper Ontology Knowledge Interchange Format) in Visual Studio Code. This extension provides comprehensive support for working with SUMO ontology files, including all features from the JEdit SUMO plugin and advanced theorem proving capabilities.
 
 For a formal specification of SUO-KIF, see ["Standard Upper Ontology - Knowledge Interchange Format" (Pease, 2009)](suo-kif.pdf).
 
-## Installation
-
-Download the VSIX from the Github releases page, then install the extension via VSCode: `Ctrl-Shift-P` > `Install Extension from File`
-
 ## Features
 
-### Syntax Highlighting
+### Syntax Highlighting & Code Intelligence
+*   **Syntax Highlighting:** Full support for logic operators, quantifiers, variables (`?var`, `@row`), and string literals.
+*   **Symbol Lookup:** Right-click > **"SUO-KIF: Search Symbol in Workspace"** to find usages.
+*   **Go to Definition:** (`F12`) Jump to defining relations like `instance`, `subclass`, `domain`.
+*   **Class Taxonomy:** Right-click > **"SUO-KIF: Show Class Taxonomy"** to visualize class hierarchies.
+*   **Type Hinting:** Hover over relations to see argument types inferred from `(domain ...)` rules.
+*   **Formatting:** (`Ctrl+Shift+F`) Reformat axioms with standard SUMO indentation.
 
-Highlights syntax according to the SUO-KIF language specification:
-- Logic Operators (`and`, `or`, `not`, `=>`, `<=>`)
-- Quantifiers (`forall`, `exists`)
-- Functions (uppercase prefix)
-- Relations (lowercase prefix)
-- String and number literals
-- Escaped strings
-- Classes and Instances
-- Variables (`?var`) and Row Variables (`@row`)
-- Parenthesis matching
+### TPTP Generation & Theorem Proving
+This extension integrates with **SigmaKEE** to convert SUO-KIF to TPTP, allowing you to run consistency checks and proof queries using provers like **Vampire** or **E-Prover**.
 
-### Symbol Lookup
+*   **Generate TPTP:** Convert your workspace or specific files to TPTP format for analysis.
+*   **Run Prover:** Directly invoke a theorem prover on your ontology to check for logical consistency or prove theorems.
 
-Right-click a symbol and select **"SUO-KIF: Search Symbol in Workspace"** to get a listing of all uses of that symbol. Filter by argument position to find specific usages.
+#### Modes of Operation
+1.  **Docker (Recommended):** Uses the official `adampease/sigmakee` Docker image. Requires Docker installed.
+2.  **Local Sigma:** Uses a local installation of SigmaKEE (requires Java).
+3.  **Context Aware:** Can integrate your current workspace with an **External Knowledge Base** (like the standard SUMO library) for full context validation.
 
-**Keybinding:** Available from context menu
+## Installation & Setup
 
-### Go to Definition
+1.  Install the extension from the VSCode Marketplace or VSIX.
+2.  **Theorem Prover:** Download [Vampire](https://vprover.github.io/) or [E-Prover](https://wwwlehre.dhbw-stuttgart.de/~sschulz/E/E.html) and set the path in settings (`suo-kif.proverPath`).
 
-Navigate directly to where a term is defined. The extension looks for defining relations like `instance`, `subclass`, `subrelation`, `domain`, etc.
+### Configuring SigmaKEE (Required for TPTP/Proving)
 
-**Keybinding:** `F12`
+To generate valid TPTP, the extension uses SigmaKEE. You can choose one of two methods:
 
-**Context Menu:** Right-click > **"SUO-KIF: Go to Definition"**
+**Option A: Docker (Easiest)**
+1.  Install Docker Desktop.
+2.  In VSCode Settings, enable `suo-kif.useDocker`.
+3.  (Optional) Set `suo-kif.dockerImage` (default: `adampease/sigmakee`).
 
-### Class Taxonomy Viewer
+**Option B: Local Installation**
+1.  Clone and build [SigmaKEE](https://github.com/ontologyportal/sigmakee).
+2.  In VSCode Settings, set `suo-kif.sigmaPath` to your SigmaKEE directory (the folder containing `build/` or `lib/`).
 
-View the class hierarchy for any symbol. Shows:
-- Superclass/ancestor tree
-- Direct subclasses
-- Documentation strings
+## Usage
 
-**Context Menu:** Right-click > **"SUO-KIF: Show Class Taxonomy"**
+### 1. Generating TPTP
+Right-click in an editor and select **"SUO-KIF: Generate TPTP File"**.
+*   **Selection/File/Workspace:** Choose the scope of conversion.
+*   **Context:** Choose **"Standalone"** (just your files) or **"Integrate with External KB"** (e.g., merge your work with SUMO).
 
-### Code Formatting
+### 2. Running the Theorem Prover
+Open the Command Palette (`Ctrl+Shift+P`) or Right-click and select **"SUO-KIF: Run Prover on..."**.
+*   **Scope:** Select **Selection**, **Current File**, or **Entire Workspace**.
+*   **Result:** The extension converts the content (plus any external KB context) to TPTP, runs the prover, and reports if the logical theory is **Satisfiable** (Consistent), **Unsatisfiable** (Contradiction), or if a **Theorem** was proved.
 
-Reformat axioms with standard SUMO indentation style. Select an expression and format it, or format the entire document.
+### 3. External Knowledge Base Integration
+When working on extensions to SUMO, you usually want to verify your files *in the context of SUMO*.
+1.  Download the SUMO .kif files (e.g., from the [SUMO repo](https://github.com/ontologyportal/sumo)).
+2.  When running Prover/TPTP commands, select **"Integrate with External KB"**.
+3.  Select the folder containing the SUMO .kif files. The extension will remember this path (`suo-kif.externalKBPath`).
 
-**Keybinding:** `Ctrl+Shift+F` (with selection) or use Document Format
-
-**Context Menu:** Right-click > **"SUO-KIF: Format Axiom"**
-
-Formatting follows SUMO conventions:
-- Proper indentation for nested expressions
-- Arguments to logical operators on separate lines
-- Quantifier variables kept together
-
-### Browse Term in Sigma
-
-Open any term directly in the online Sigma Knowledge Base browser at ontologyportal.org.
-
-**Keybinding:** `Ctrl+Shift+B`
-
-**Context Menu:** Right-click > **"SUO-KIF: Browse Term in Sigma"**
-
-### Type Hinting / Signature Help
-
-When typing a relation, a hint window appears showing:
-- Documentation from `(documentation ...)` statements
-- Argument types inferred from `(domain ...)` rules
-
-### Auto-Completion
-
-Get intelligent completions for all symbols defined in your workspace, with type and documentation information.
-
-### Error Checking
-
-Real-time validation including:
-- Unclosed parenthesis detection
-- Class naming conventions (classes should start with uppercase)
-- Logical operator operand validation
-- Arity checking against domain declarations
-- Variable usage validation
-
-**Context Menu:** Right-click > **"SUO-KIF: Check for Errors"**
-
-### Generate TPTP File
-
-Convert your SUO-KIF knowledge base to TPTP (TPTP Problem Library) format for use with theorem provers. The generated file opens in a new editor pane without saving to disk - you can then review and save it as needed.
-
-**Context Menu:** Right-click > **"SUO-KIF: Generate TPTP File"**
-
-Options:
-- **Current File** - Convert the current .kif file
-- **Entire Workspace** - Convert all .kif files in the workspace
-- **Selection Only** - Convert only the selected text
-
-The generated TPTP includes:
-- Header with source information and timestamp
-- Statistics on converted/skipped expressions
-- Meaningful axiom names based on statement type
-- Comments for any skipped expressions
-
-### Theorem Prover Integration
-
-Query selected expressions using Vampire or E-Prover theorem provers. Requires external prover installation.
-
-**Context Menu:** Right-click > **"SUO-KIF: Query with Theorem Prover"**
-
-## Configuration
-
-Open VSCode settings (`Ctrl+,`) and search for "SUO-KIF" to configure:
+## Configuration Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `suo-kif.language` | `EnglishLanguage` | Language for documentation strings |
-| `suo-kif.sigmaUrl` | `http://sigma.ontologyportal.org:8080/sigma/Browse.jsp` | Sigma KB browser URL |
-| `suo-kif.knowledgeBase` | `SUMO` | Knowledge base name in Sigma |
-| `suo-kif.proverPath` | (empty) | Path to Vampire or E-Prover executable |
-| `suo-kif.proverType` | `vampire` | Prover type: `vampire` or `eprover` |
-| `suo-kif.proverTimeout` | `30` | Timeout in seconds for prover queries |
-| `suo-kif.formatIndentSize` | `2` | Spaces per indentation level |
+| `suo-kif.proverPath` | (empty) | Path to Vampire or E-Prover executable (Required for proving). |
+| `suo-kif.proverType` | `vampire` | `vampire` or `eprover`. |
+| `suo-kif.proverTimeout` | `30` | Timeout in seconds. |
+| `suo-kif.useDocker` | `false` | Enable Docker mode for SigmaKEE. |
+| `suo-kif.dockerImage` | `adampease/sigmakee` | Docker image to use. |
+| `suo-kif.sigmaPath` | (empty) | Path to local SigmaKEE installation (if not using Docker). |
+| `suo-kif.externalKBPath`| (empty) | Path to external ontology files (e.g. SUMO) for integration. |
+| `suo-kif.useNativeJS` | `false` | **Experimental:** Use legacy JS converter (not recommended). |
+| `suo-kif.formatIndentSize`| `2` | Indentation size for formatting. |
 
-## Keyboard Shortcuts
+## Requirements
 
-| Command | Keybinding | Description |
-|---------|------------|-------------|
-| Go to Definition | `F12` | Jump to symbol definition |
-| Format Axiom | `Ctrl+Shift+F` | Format selected expression |
-| Browse in Sigma | `Ctrl+Shift+B` | Open term in Sigma browser |
-
-## Context Menu Commands
-
-Right-click in the editor to access:
-- Search Symbol in Workspace
-- Go to Definition
-- Show Class Taxonomy
-- Browse Term in Sigma
-- Format Axiom (when text selected)
-- Check for Errors
-- Query with Theorem Prover (when text selected)
-- Generate TPTP File
-
-## Setting Up Theorem Provers
-
-### Vampire
-
-1. Download Vampire from https://vprover.github.io/
-2. Set `suo-kif.proverPath` to the Vampire executable path
-3. Set `suo-kif.proverType` to `vampire`
-
-### E-Prover
-
-1. Download E-Prover from https://wwwlehre.dhbw-stuttgart.de/~sschulz/E/E.html
-2. Set `suo-kif.proverPath` to the E-Prover executable path
-3. Set `suo-kif.proverType` to `eprover`
+*   **VSCode** 1.70+
+*   **Java 21+** (If using Local Sigma mode)
+*   **Docker** (If using Docker mode)
+*   **Theorem Prover** (Vampire or E-Prover) for proof capabilities.
 
 ## Resources
 
@@ -167,4 +90,4 @@ Right-click in the editor to access:
 
 ## Credits
 
-This extension is inspired by the [SUMOjEdit](https://github.com/ontologyportal/SUMOjEdit) plugin for jEdit.
+This extension is inspired by the [SUMOjEdit](https://github.com/ontologyportal/SUMOjEdit) plugin for jEdit and utilizes code from the [SigmaKEE](https://github.com/ontologyportal/sigmakee) project.

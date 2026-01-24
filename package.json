@@ -2,7 +2,7 @@
   "name": "suo-kif",
   "displayName": "SUO-KIF Support",
   "icon": "extension-icon.png",
-  "description": "Full-featured SUO-KIF/SUMO development environment for VSCode",
+  "description": "Full-featured SUO-KIF/SUMO and TPTP development environment for VSCode",
   "version": "2.0.0",
   "publisher": "ontologyportal",
   "repository": {
@@ -10,6 +10,14 @@
     "url": "https://github.com/ontologyportal/vscode"
   },
   "license": "MIT",
+  "scripts": {
+    "test": "mocha test/**/*.test.js",
+    "test:watch": "mocha --watch test/**/*.test.js",
+    "lint": "node --check extension.js && node --check src/**/*.js"
+  },
+  "devDependencies": {
+    "mocha": "^10.2.0"
+  },
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -20,7 +28,8 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:suo-kif"
+    "onLanguage:suo-kif",
+    "onLanguage:tptp"
   ],
   "contributes": {
     "commands": [
@@ -51,6 +60,10 @@
       {
         "command": "suo-kif.queryProver",
         "title": "SUO-KIF: Query with Theorem Prover"
+      },
+      {
+        "command": "suo-kif.runProverOnScope",
+        "title": "SUO-KIF: Run Prover on..."
       },
       {
         "command": "suo-kif.generateTPTP",
@@ -115,9 +128,14 @@
           "group": "1_modification@3"
         },
         {
-          "command": "suo-kif.generateTPTP",
+          "command": "suo-kif.runProverOnScope",
           "when": "editorLangId == suo-kif",
           "group": "1_modification@4"
+        },
+        {
+          "command": "suo-kif.generateTPTP",
+          "when": "editorLangId == suo-kif",
+          "group": "1_modification@5"
         }
       ]
     },
@@ -155,6 +173,31 @@
           "default": 30,
           "description": "Timeout in seconds for theorem prover queries."
         },
+        "suo-kif.sigmaPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to SigmaKEE installation or source directory."
+        },
+        "suo-kif.useDocker": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use a Docker container for SigmaKEE operations instead of a local installation."
+        },
+        "suo-kif.dockerImage": {
+          "type": "string",
+          "default": "adampease/sigmakee",
+          "description": "Docker image to use if suo-kif.useDocker is enabled."
+        },
+        "suo-kif.useNativeJS": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use experimental native JavaScript conversion (not recommended, lacks full context)."
+        },
+        "suo-kif.externalKBPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to an external knowledge base directory (e.g. SUMO) to integrate with."
+        },
         "suo-kif.formatIndentSize": {
           "type": "number",
           "default": 2,
@@ -177,6 +220,23 @@
           ".kif"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "tptp",
+        "aliases": [
+          "TPTP",
+          "TPTP Problem"
+        ],
+        "icon": {
+          "light": "./tptp-file-icon.png",
+          "dark": "./tptp-file-icon.png"
+        },
+        "extensions": [
+          ".p",
+          ".tptp",
+          ".ax"
+        ],
+        "configuration": "./tptp-language-configuration.json"
       }
     ],
     "grammars": [
@@ -184,6 +244,11 @@
         "language": "suo-kif",
         "scopeName": "source.suo-kif",
         "path": "./syntaxes/suo-kif.tmLanguage.json"
+      },
+      {
+        "language": "tptp",
+        "scopeName": "source.tptp",
+        "path": "./syntaxes/tptp.tmLanguage.json"
       }
     ]
   }

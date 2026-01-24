@@ -4,11 +4,38 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// Import modular components
+const { tokenize: tptpTokenize } = require('./src/parser/tokenizer');
+const { parse: tptpParse, collectFreeVariables } = require('./src/parser/parser');
+const { convertKnowledgeBase, convertFormula, defaultOptions: tptpDefaultOptions } = require('./src/tptp/converter');
+
 const LOGIC_OPS = ['and', 'or', 'not', '=>', '<=>'];
 const QUANTIFIERS = ['forall', 'exists'];
 const DEFINING_RELATIONS = ['instance', 'subclass', 'subrelation', 'domain', 'domainSubclass', 'range', 'rangeSubclass', 'documentation', 'format', 'termFormat'];
 let symbolMetadata = {};
 let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
+
+// TPTP formula roles for symbol categorization
+const TPTP_ROLES = {
+    'axiom': vscode.SymbolKind.Constant,
+    'hypothesis': vscode.SymbolKind.Variable,
+    'definition': vscode.SymbolKind.Class,
+    'assumption': vscode.SymbolKind.Variable,
+    'lemma': vscode.SymbolKind.Method,
+    'theorem': vscode.SymbolKind.Method,
+    'corollary': vscode.SymbolKind.Method,
+    'conjecture': vscode.SymbolKind.Function,
+    'negated_conjecture': vscode.SymbolKind.Function,
+    'plain': vscode.SymbolKind.Field,
+    'type': vscode.SymbolKind.TypeParameter,
+    'interpretation': vscode.SymbolKind.Interface,
+    'fi_domain': vscode.SymbolKind.Enum,
+    'fi_functors': vscode.SymbolKind.EnumMember,
+    'fi_predicates': vscode.SymbolKind.EnumMember,
+    'unknown': vscode.SymbolKind.Null
+};
+
+const TPTP_FORMULA_TYPES = ['thf', 'tff', 'tcf', 'fof', 'cnf', 'tpi'];
 
 function activate(context) {
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('suo-kif');
@@ -22,6 +49,7 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.browseInSigma', browseInSigmaCommand));
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.checkErrors', checkErrorsCommand));
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.queryProver', queryProverCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.runProverOnScope', runProverOnScopeCommand));
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.generateTPTP', generateTPTPCommand));
 
     // Build workspace definitions index on startup
@@ -116,6 +144,15 @@ function activate(context) {
                     items.push(item);
                 }
                 return items;
+            }
+        })
+    );
+
+    // TPTP Document Symbol Provider
+    context.subscriptions.push(
+        vscode.languages.registerDocumentSymbolProvider('tptp', {
+            provideDocumentSymbols(document, token) {
+                return provideTPTPDocumentSymbols(document);
             }
         })
     );
@@ -1473,7 +1510,747 @@ async function queryProverCommand() {
 }
 
 /**
+ * Run Prover on Scope Command
+ * Allows running the prover on Selection, File, or Workspace
+ */
+async function runProverOnScopeCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const proverPath = config.get('proverPath');
+    const proverType = config.get('proverType') || 'vampire';
+    const timeout = config.get('proverTimeout') || 30;
+
+    if (!proverPath) {
+        const configure = await vscode.window.showErrorMessage(
+            'Theorem prover path not configured. Please set suo-kif.proverPath in settings.',
+            'Open Settings'
+        );
+        if (configure === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.proverPath');
+        }
+        return;
+    }
+
+    // Check if prover exists
+    if (!fs.existsSync(proverPath)) {
+        vscode.window.showErrorMessage(`Theorem prover not found at: ${proverPath}`);
+        return;
+    }
+
+    // Offer options for scope
+    const options = [
+        { label: 'Selection / Current Line', description: 'Run prover on selected text or current line' },
+        { label: 'Current File', description: 'Run prover on the current file' },
+        { label: 'Entire Workspace', description: 'Run prover on all .kif files in workspace' }
+    ];
+
+    const selected = await vscode.window.showQuickPick(options, {
+        placeHolder: 'Select scope for theorem prover'
+    });
+
+    if (!selected) return;
+
+    let kifContent = '';
+    let sourceName = '';
+
+    // Collect content
+    if (selected.label === 'Selection / Current Line') {
+        if (!editor.selection.isEmpty) {
+            kifContent = document.getText(editor.selection);
+            sourceName = 'selection';
+        } else {
+            const line = document.lineAt(editor.selection.active.line);
+            kifContent = line.text;
+            sourceName = 'line';
+        }
+    } else if (selected.label === 'Current File') {
+        kifContent = document.getText();
+        sourceName = path.basename(document.fileName, '.kif');
+    } else if (selected.label === 'Entire Workspace') {
+        const files = await vscode.workspace.findFiles('**/*.kif');
+        if (files.length === 0) {
+            vscode.window.showWarningMessage('No .kif files found in workspace.');
+            return;
+        }
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Collecting workspace files...',
+            cancellable: false
+        }, async (progress) => {
+            for (let i = 0; i < files.length; i++) {
+                progress.report({ message: `Processing ${i + 1}/${files.length} files...` });
+                const doc = await vscode.workspace.openTextDocument(files[i]);
+                kifContent += `; File: ${vscode.workspace.asRelativePath(files[i])}\n`;
+                kifContent += doc.getText() + '\n\n';
+            }
+        });
+        sourceName = 'workspace';
+    }
+
+    if (!kifContent.trim()) {
+        vscode.window.showWarningMessage('No content to process.');
+        return;
+    }
+
+    // Generate TPTP
+    let tptpContent = '';
+    let axiomCount = 0;
+
+    const useDocker = config.get('useDocker');
+    const useNativeJS = config.get('useNativeJS');
+    const sigmaPath = getSigmaPath();
+
+    if (useNativeJS) {
+         // Fallback to JS
+        const tokens = tptpTokenize(kifContent);
+        const ast = tptpParse(tokens);
+        const result = convertKnowledgeBase(ast, {
+            sourceName: sourceName,
+            hideNumbers: true,
+            addPrefixes: true,
+            lang: 'fof',
+            includeSourceComments: false
+        });
+        tptpContent = result.tptp;
+        axiomCount = result.axiomCount;
+    } else if (useDocker || sigmaPath) {
+        // Use Sigma
+        const contextFiles = await collectFilesForContext();
+        if (!contextFiles) return; // Cancelled
+
+        try {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: useDocker ? 'Converting via Sigma Docker...' : 'Converting via local Sigma...',
+                cancellable: false
+            }, async (progress) => {
+                if (sourceName === 'selection' || sourceName === 'line') {
+                    const tmpKif = path.join(os.tmpdir(), `temp_selection_${Date.now()}.kif`);
+                    fs.writeFileSync(tmpKif, kifContent);
+                    contextFiles.push(tmpKif);
+                }
+                
+                if (useDocker) {
+                    tptpContent = await runSigmaDocker(contextFiles, 'PROVE', null);
+                } else {
+                    tptpContent = await runSigmaConverter(sigmaPath, contextFiles, 'PROVE', null);
+                }
+                
+                // Count roughly
+                axiomCount = (tptpContent.match(/fof\(/g) || []).length;
+            });
+        } catch (err) {
+            vscode.window.showErrorMessage(`Sigma conversion failed: ${err.message}`);
+            return;
+        }
+    } else {
+        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", enable "suo-kif.useDocker", or enable "suo-kif.useNativeJS".');
+        return;
+    }
+
+    if (axiomCount === 0 && !tptpContent) {
+        vscode.window.showWarningMessage('No valid axioms produced.');
+        return;
+    }
+
+    // Write to temp file
+    const tempDir = os.tmpdir();
+    const tempFile = path.join(tempDir, `suokif-verify-${Date.now()}.p`);
+    fs.writeFileSync(tempFile, tptpContent);
+
+    // Run Prover
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Running ${proverType} on ${sourceName}...`,
+        cancellable: true
+    }, async (progress, token) => {
+        return new Promise((resolve, reject) => {
+            let cmd;
+            if (proverType === 'vampire') {
+                // Use cascade mode for best effort
+                cmd = `"${proverPath}" --mode casc -t ${timeout} "${tempFile}"`;
+            } else {
+                cmd = `"${proverPath}" --auto --cpu-limit=${timeout} "${tempFile}"`;
+            }
+
+            const proc = exec(cmd, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+                // Clean up temp file
+                try { fs.unlinkSync(tempFile); } catch (e) {}
+
+                if (token.isCancellationRequested) {
+                    resolve();
+                    return;
+                }
+
+                const outputChannel = vscode.window.createOutputChannel('SUO-KIF Prover');
+                outputChannel.clear();
+                outputChannel.appendLine(`Scope: ${selected.label}`);
+                outputChannel.appendLine(`Source: ${sourceName}`);
+                outputChannel.appendLine(`Axioms: ${axiomCount}`);
+                outputChannel.appendLine('='.repeat(60));
+                outputChannel.appendLine('');
+
+                if (error && !stdout) {
+                    outputChannel.appendLine('Error running prover:');
+                    outputChannel.appendLine(stderr || error.message);
+                } else {
+                    outputChannel.appendLine('Prover Output:');
+                    outputChannel.appendLine(stdout);
+                    if (stderr) {
+                        outputChannel.appendLine('\nStderr:');
+                        outputChannel.appendLine(stderr);
+                    }
+
+                    // Interpret results
+                    if (stdout.includes('Unsatisfiable') || stdout.includes('SZS status Unsatisfiable')) {
+                        vscode.window.showInformationMessage('Result: Unsatisfiable (Contradiction found).');
+                    } else if (stdout.includes('Satisfiable') || stdout.includes('SZS status Satisfiable')) {
+                        vscode.window.showInformationMessage('Result: Satisfiable (Consistent).');
+                    } else if (stdout.includes('Theorem') || stdout.includes('SZS status Theorem')) {
+                        vscode.window.showInformationMessage('Result: Theorem (Proof found).');
+                    } else if (stdout.includes('CounterSatisfiable') || stdout.includes('SZS status CounterSatisfiable')) {
+                        vscode.window.showWarningMessage('Result: Counter-Satisfiable.');
+                    } else if (stdout.includes('Timeout') || stdout.includes('SZS status Timeout')) {
+                        vscode.window.showWarningMessage('Result: Timeout.');
+                    } else {
+                        vscode.window.showInformationMessage('Prover finished. Check output.');
+                    }
+                }
+
+                outputChannel.show();
+                resolve();
+            });
+
+            token.onCancellationRequested(() => {
+                proc.kill();
+            });
+        });
+    });
+}
+
+/**
  * Generate TPTP File Command - Opens TPTP conversion in new editor pane
+ * Uses Sigma if configured, else uses JS converter
+ */
+async function generateTPTPCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const document = editor.document;
+
+    // Offer options for what to convert
+    const options = [
+        { label: 'Current File', description: 'Convert the current file to TPTP' },
+        { label: 'Entire Workspace', description: 'Convert all .kif files in workspace to TPTP' },
+        { label: 'Selection Only', description: 'Convert selected text to TPTP' }
+    ];
+
+    const selected = await vscode.window.showQuickPick(options, {
+        placeHolder: 'What would you like to convert to TPTP?'
+    });
+
+    if (!selected) return;
+
+    let kifContent = '';
+    let sourceName = '';
+
+    if (selected.label === 'Current File') {
+        kifContent = document.getText();
+        sourceName = path.basename(document.fileName, '.kif');
+    } else if (selected.label === 'Entire Workspace') {
+        const files = await vscode.workspace.findFiles('**/*.kif');
+        if (files.length === 0) {
+            vscode.window.showWarningMessage('No .kif files found in workspace.');
+            return;
+        }
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Collecting workspace files...',
+            cancellable: false
+        }, async (progress) => {
+            for (let i = 0; i < files.length; i++) {
+                progress.report({ message: `Processing ${i + 1}/${files.length} files...` });
+                const doc = await vscode.workspace.openTextDocument(files[i]);
+                kifContent += `; File: ${vscode.workspace.asRelativePath(files[i])}\n`;
+                kifContent += doc.getText() + '\n\n';
+            }
+        });
+
+        sourceName = 'workspace';
+    } else if (selected.label === 'Selection Only') {
+        if (editor.selection.isEmpty) {
+            vscode.window.showWarningMessage('No text selected.');
+            return;
+        }
+        kifContent = document.getText(editor.selection);
+        sourceName = path.basename(document.fileName, '.kif') + '-selection';
+    }
+
+    // Convert
+    let tptpContent = '';
+    let stats = '';
+    let generatorInfo = '';
+
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const useDocker = config.get('useDocker');
+    const dockerImage = config.get('dockerImage') || 'adampease/sigmakee';
+    const useNativeJS = config.get('useNativeJS');
+    const sigmaPath = getSigmaPath();
+
+    if (useNativeJS) {
+        // Use JS
+        const tokens = tptpTokenize(kifContent);
+        const ast = tptpParse(tokens);
+        const result = convertKnowledgeBase(ast, {
+            sourceName: sourceName,
+            hideNumbers: true,
+            addPrefixes: true,
+            lang: 'fof',
+            includeSourceComments: false
+        });
+        tptpContent = result.tptp;
+        generatorInfo = '% Generated by: SUO-KIF VSCode Extension (Integrated JS Converter - Experimental)';
+        stats = `% Axiom count: ${result.axiomCount}\n`;
+    } else if (useDocker || sigmaPath) {
+        // Use Sigma (Docker or Local)
+        const contextFiles = await collectFilesForContext();
+        if (!contextFiles) return;
+
+        try {
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: useDocker ? 'Converting via Sigma Docker...' : 'Converting via local Sigma...',
+                cancellable: false
+            }, async (progress) => {
+                if (useDocker) {
+                    tptpContent = await runSigmaDocker(contextFiles, 'CONVERT', kifContent);
+                    generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Dockerized Sigma - Image: ${dockerImage})`;
+                } else {
+                    tptpContent = await runSigmaConverter(sigmaPath, contextFiles, 'CONVERT', kifContent);
+                    generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Native Sigma - Path: ${sigmaPath})`;
+                }
+                const count = (tptpContent.match(/fof\(/g) || []).length;
+                stats = `% Axiom count: ${count}\n`;
+            });
+        } catch (err) {
+            vscode.window.showErrorMessage(`Sigma conversion failed: ${err.message}`);
+            return;
+        }
+    } else {
+        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", enable "suo-kif.useDocker", or enable "suo-kif.useNativeJS".');
+        return;
+    }
+
+    // Open as untitled document
+    const tptpDoc = await vscode.workspace.openTextDocument({
+        content: `${generatorInfo}\n${stats}\n${tptpContent}`,
+        language: 'tptp'
+    });
+
+    await vscode.window.showTextDocument(tptpDoc, vscode.ViewColumn.Beside);
+}
+
+async function collectFilesForContext() {
+    // 1. Ask for Context Mode
+    const contextOptions = [
+        { label: 'Standalone', description: 'Use only the current workspace files (no external KB)' },
+        { label: 'Integrate with External KB', description: 'Load an external KB (e.g. SUMO) and add workspace files' }
+    ];
+    
+    const selectedContext = await vscode.window.showQuickPick(contextOptions, {
+        placeHolder: 'Select Knowledge Base Context'
+    });
+    
+    if (!selectedContext) return null;
+    
+    const filesToLoad = [];
+    
+    // 2. If External, get path
+    if (selectedContext.label === 'Integrate with External KB') {
+        const config = vscode.workspace.getConfiguration('suo-kif');
+        let extPath = config.get('externalKBPath');
+        
+        if (!extPath || !fs.existsSync(extPath)) {
+            const selection = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select External KB Directory'
+            });
+            
+            if (selection && selection.length > 0) {
+                extPath = selection[0].fsPath;
+                // Optionally save setting
+                config.update('externalKBPath', extPath, vscode.ConfigurationTarget.Global);
+            } else {
+                return null; // Cancelled
+            }
+        }
+        
+        // Collect all .kif files in external dir
+        if (fs.existsSync(extPath)) {
+            const extFiles = fs.readdirSync(extPath).filter(f => f.endsWith('.kif'));
+            extFiles.forEach(f => filesToLoad.push(path.join(extPath, f)));
+        }
+    }
+    
+    // 3. Always add workspace files (unless we want strict mode? user said "workspace as entirety" or "integrate")
+    // If "Standalone" -> Workspace IS the KB.
+    // If "Integrate" -> External + Workspace.
+    const workspaceFiles = await vscode.workspace.findFiles('**/*.kif');
+    workspaceFiles.forEach(f => filesToLoad.push(f.fsPath));
+    
+    return filesToLoad;
+}
+
+// Helper to get Sigma Path (reused)
+function getSigmaPath() {
+    // Check config
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    let path = config.get('sigmaPath');
+    
+    // Check env var
+    if (!path && process.env.SIGMA_SRC) {
+        path = process.env.SIGMA_SRC;
+    }
+
+    if (!path) return null;
+    if (fs.existsSync(path)) return path;
+    return null;
+}
+
+async function runSigmaDocker(filesToLoad, action, targetContent = "") {
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const image = config.get('dockerImage') || 'adampease/sigmakee';
+    const tempDir = os.tmpdir();
+
+    // 1. Prepare Wrapper Source in Temp
+    // Use the same wrapper code as local
+    const wrapperSource = path.join(tempDir, 'SigmaWrapper.java');
+    const wrapperContent = `
+import com.articulate.sigma.*;
+import com.articulate.sigma.trans.*;
+import java.nio.file.*;
+import java.io.*;
+import java.util.*;
+
+public class SigmaWrapper {
+    public static void main(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: SigmaWrapper <params_file>");
+            System.exit(1);
+        }
+
+        try {
+            PrintStream originalOut = System.out;
+            System.setOut(new PrintStream(new OutputStream() { public void write(int b) {} }));
+
+            List<String> lines = Files.readAllLines(Paths.get(args[0]));
+            String action = "";
+            String targetContent = "";
+            List<String> filesToLoad = new ArrayList<>();
+
+            for (String line : lines) {
+                if (line.startsWith("ACTION=")) action = line.substring(7);
+                else if (line.startsWith("TARGET=")) targetContent = line.substring(7).replace("\\\\n", "\\n");
+                else if (line.startsWith("LOAD=")) filesToLoad.add(line.substring(5));
+            }
+
+            KBmanager.getMgr().initializeOnce();
+            
+            String kbName = "VSCodeKB";
+            KB kb = new KB(kbName, "."); 
+            KBmanager.getMgr().addKB(kbName, false);
+            KBmanager.getMgr().setPref("sumokbname", kbName);
+
+            for (String f : filesToLoad) {
+                kb.addConstituent(f);
+            }
+            kb.reload();
+
+            System.setOut(originalOut);
+
+            if ("PROVE".equals(action)) {
+                SUMOKBtoTPTPKB exporter = new SUMOKBtoTPTPKB();
+                exporter.kb = kb;
+                File tempOut = File.createTempFile("sigma_export", ".p");
+                exporter.writeFile(tempOut.getAbsolutePath(), null, false, new PrintWriter(System.out));
+            } else if ("CONVERT".equals(action)) {
+                if (targetContent != null && !targetContent.isEmpty()) {
+                     String tptp = SUMOformulaToTPTPformula.tptpParseSUOKIFString(targetContent, false);
+                     if (tptp != null) System.out.println(tptp);
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+}
+`;
+    fs.writeFileSync(wrapperSource, wrapperContent);
+
+    // 2. Determine Mount Points
+    const mounts = [];
+    const remappedFiles = [];
+    
+    // Mount Temp Dir (for Wrapper + Params) -> /wrapper
+    mounts.push(`-v "${tempDir}:/wrapper"`);
+
+    // Determine Workspace Root
+    let workspaceRoot = null;
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        // Docker volume mount: handle spaces? vsCode fsPath usually ok, but quoting is safe.
+        mounts.push(`-v "${workspaceRoot}:/workspace"`);
+    }
+
+    // Determine External KB Path
+    const extKBPath = config.get('externalKBPath');
+    if (extKBPath && fs.existsSync(extKBPath)) {
+        mounts.push(`-v "${extKBPath}:/kb"`);
+    }
+
+    // 3. Remap File Paths
+    const uniqueFiles = [...new Set(filesToLoad)];
+    for (const f of uniqueFiles) {
+        let mapped = f;
+        if (workspaceRoot && f.startsWith(workspaceRoot)) {
+            // Remap to /workspace
+            const rel = path.relative(workspaceRoot, f);
+            mapped = path.join('/workspace', rel);
+        } else if (extKBPath && f.startsWith(extKBPath)) {
+            // Remap to /kb
+            const rel = path.relative(extKBPath, f);
+            mapped = path.join('/kb', rel);
+        } else if (f.startsWith(tempDir)) {
+             // Remap to /wrapper
+             const rel = path.relative(tempDir, f);
+             mapped = path.join('/wrapper', rel);
+        }
+        // Normalize slashes for Linux container
+        mapped = mapped.replace(/\\/g, '/');
+        remappedFiles.push(mapped);
+    }
+
+    // 4. Create Params File
+    const paramsFile = path.join(tempDir, `sigma-params-docker-${Date.now()}.txt`);
+    let paramsContent = `ACTION=${action}\n`;
+    if (targetContent) {
+        paramsContent += `TARGET=${targetContent.replace(/\n/g, '\\n')}\n`;
+    }
+    for (const f of remappedFiles) {
+        paramsContent += `LOAD=${f}\n`;
+    }
+    fs.writeFileSync(paramsFile, paramsContent);
+
+    // 5. Run Docker Command
+    // Classpath: /root/sigmakee/sigmakee.jar + /root/sigmakee/*.jar
+    // Command: java SigmaWrapper.java (JDK 21 supports single file source)
+    const paramsFileName = path.basename(paramsFile);
+    const cmd = `docker run --rm ${mounts.join(' ')} ${image} java -cp "/root/sigmakee/*:/root/sigmakee/sigmakee.jar" /wrapper/SigmaWrapper.java /wrapper/${paramsFileName}`;
+
+    return new Promise((resolve, reject) => {
+        exec(cmd, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+            try { fs.unlinkSync(paramsFile); } catch(e){}
+            // Don't delete wrapperSource immediately as concurrent runs might need it, 
+            // but for simplicity we leave it or cleanup later. 
+            // In temp dir, OS cleans up eventually.
+            
+            if (err) {
+                reject(new Error(`Docker execution failed: ${stderr || err.message}`));
+            } else {
+                resolve(stdout);
+            }
+        });
+    });
+}
+
+async function runSigmaConverter(sigmaHome, filesToLoad, action, targetContent = "") {
+    const cp = await getSigmaClasspath(sigmaHome);
+    const wrapper = await ensureWrapperCompiled(cp);
+    
+    const tempDir = os.tmpdir();
+    const paramsFile = path.join(tempDir, `sigma-params-${Date.now()}.txt`);
+    
+    let params = `ACTION=${action}\n`;
+    if (targetContent) {
+        // Escape newlines for simple parsing
+        params += `TARGET=${targetContent.replace(/\n/g, '\\n')}\n`;
+    }
+    
+    // Dedup files
+    const uniqueFiles = [...new Set(filesToLoad)];
+    for (const f of uniqueFiles) {
+        params += `LOAD=${f}\n`;
+    }
+    
+    fs.writeFileSync(paramsFile, params);
+
+    return new Promise((resolve, reject) => {
+        const cmd = `java -Xmx4g -cp "${cp}" SigmaWrapper "${paramsFile}"`;
+        
+        exec(cmd, { cwd: tempDir, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+            // Cleanup
+            try { fs.unlinkSync(paramsFile); } catch(e){}
+            
+            if (err) {
+                // If stdout has content, it might be partial output, but usually err means failure
+                // stderr might have helpful info
+                reject(new Error(`Sigma execution failed: ${stderr || err.message}`));
+            } else {
+                resolve(stdout);
+            }
+        });
+    });
+}
+
+async function getSigmaClasspath(sigmaHome) {
+    const parts = [];
+    
+    // 1. Build directory (classes or jar)
+    const buildDir = path.join(sigmaHome, 'build');
+    const classesDir = path.join(buildDir, 'classes');
+    
+    if (fs.existsSync(classesDir)) {
+        parts.push(classesDir);
+    } else {
+        // Look for jar
+        const files = fs.existsSync(buildDir) ? fs.readdirSync(buildDir) : [];
+        const jar = files.find(f => f.endsWith('.jar') && f.includes('sigma'));
+        if (jar) {
+            parts.push(path.join(buildDir, jar));
+        }
+    }
+    
+    // 2. Lib directory
+    const libDir = path.join(sigmaHome, 'lib');
+    if (fs.existsSync(libDir)) {
+        parts.push(path.join(libDir, '*'));
+    }
+    
+    // Add temp dir (for Wrapper)
+    parts.push(os.tmpdir());
+    
+    return parts.join(path.delimiter);
+}
+
+async function ensureWrapperCompiled(classpath) {
+    const tempDir = os.tmpdir();
+    const wrapperSource = path.join(tempDir, 'SigmaWrapper.java');
+    const wrapperClass = path.join(tempDir, 'SigmaWrapper.class');
+    
+    // Always write source to ensure it's up to date
+    const sourceCode = `
+import com.articulate.sigma.*;
+import com.articulate.sigma.trans.*;
+import java.nio.file.*;
+import java.io.*;
+import java.util.*;
+
+public class SigmaWrapper {
+    public static void main(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: SigmaWrapper <params_file>");
+            System.exit(1);
+        }
+
+        try {
+            // Silence stdout during init to prevent noise
+            PrintStream originalOut = System.out;
+            System.setOut(new PrintStream(new OutputStream() { public void write(int b) {} }));
+
+            // Read Params
+            List<String> lines = Files.readAllLines(Paths.get(args[0]));
+            String action = "";
+            String targetContent = "";
+            List<String> filesToLoad = new ArrayList<>();
+
+            for (String line : lines) {
+                if (line.startsWith("ACTION=")) action = line.substring(7);
+                else if (line.startsWith("TARGET=")) targetContent = line.substring(7).replace("\\\\n", "\\n");
+                else if (line.startsWith("LOAD=")) filesToLoad.add(line.substring(5));
+            }
+
+            // Initialize minimal Sigma
+            KBmanager.getMgr().initializeOnce();
+            
+            // Create Custom KB
+            String kbName = "VSCodeKB";
+            KB kb = new KB(kbName, "."); // Base dir doesn't matter as we add constituents manually
+            
+            // Register KB
+            KBmanager.getMgr().addKB(kbName, false);
+            KBmanager.getMgr().setPref("sumokbname", kbName); // Make it default for converters
+
+            // Add constituents
+            for (String f : filesToLoad) {
+                kb.addConstituent(f);
+            }
+            
+            // Load/Parse (build cache)
+            // This is the heavy lifting
+            kb.reload();
+
+            // Restore stdout for output
+            System.setOut(originalOut);
+
+            if ("PROVE".equals(action)) {
+                // Export entire KB to TPTP
+                SUMOKBtoTPTPKB exporter = new SUMOKBtoTPTPKB();
+                exporter.kb = kb;
+                
+                // create temp file for output because writeFile takes a path
+                File tempOut = File.createTempFile("sigma_export", ".p");
+                String resultPath = exporter.writeFile(tempOut.getAbsolutePath(), null, false, new PrintWriter(System.out));
+                
+                // writeFile writes to file AND optionally to pw? 
+                // Sigmakee's code: _tWriteFile takes pw and writes to it.
+                // We passed System.out as pw, so it should be on stdout.
+                
+            } else if ("CONVERT".equals(action)) {
+                // Convert specific content in context of KB
+                // We split by standard delimiter or just parse
+                // Since we passed raw content, treat as one block or split
+                
+                // If content is empty, maybe we are converting a loaded file? 
+                // But targetContent is passed.
+                
+                if (targetContent != null && !targetContent.isEmpty()) {
+                     String tptp = SUMOformulaToTPTPformula.tptpParseSUOKIFString(targetContent, false);
+                     if (tptp != null) System.out.println(tptp);
+                }
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+}
+`;
+    fs.writeFileSync(wrapperSource, sourceCode);
+    
+    return new Promise((resolve, reject) => {
+        exec(`javac -cp "${classpath}" "${wrapperSource}"`, { cwd: tempDir }, (err, stdout, stderr) => {
+            if (err) {
+                reject(new Error(`Failed to compile SigmaWrapper: ${stderr || err.message}`));
+            } else {
+                resolve(wrapperClass);
+            }
+        });
+    });
+}
+
+/**
+ * Convert a single SUO-KIF expression to TPTP format (for prover queries)
+ * Uses the modular TPTP converter based on sigmakee's implementation
  */
 async function generateTPTPCommand() {
     const editor = vscode.window.activeTextEditor;
@@ -1515,7 +2292,7 @@ async function generateTPTPCommand() {
             for (let i = 0; i < files.length; i++) {
                 progress.report({ message: `Processing ${i + 1}/${files.length} files...` });
                 const doc = await vscode.workspace.openTextDocument(files[i]);
-                kifContent += `% File: ${vscode.workspace.asRelativePath(files[i])}\n`;
+                kifContent += `; File: ${vscode.workspace.asRelativePath(files[i])}\n`;
                 kifContent += doc.getText() + '\n\n';
             }
         });
@@ -1530,369 +2307,65 @@ async function generateTPTPCommand() {
         sourceName = path.basename(document.fileName, '.kif') + '-selection';
     }
 
-    // Convert to TPTP
-    const tptpContent = convertKBToTPTPWithComments(kifContent, sourceName);
+    // Parse the KIF content using modular parser
+    const tokens = tptpTokenize(kifContent);
+    const ast = tptpParse(tokens);
+
+    // Convert to TPTP using modular converter
+    const result = convertKnowledgeBase(ast, {
+        sourceName: sourceName,
+        hideNumbers: true,
+        addPrefixes: true,
+        lang: 'fof',
+        includeSourceComments: false
+    });
 
     // Open as untitled document
     const tptpDoc = await vscode.workspace.openTextDocument({
-        content: tptpContent,
+        content: result.tptp,
         language: 'tptp'  // Will use plaintext if TPTP language not installed
     });
 
     await vscode.window.showTextDocument(tptpDoc, vscode.ViewColumn.Beside);
-    vscode.window.showInformationMessage(`TPTP file generated. Use File > Save As to save it.`);
+    vscode.window.showInformationMessage(
+        `TPTP file generated: ${result.axiomCount} axioms, ${result.skippedCount} skipped. Use File > Save As to save it.`
+    );
 }
 
 /**
- * Convert a knowledge base to TPTP format with header comments
- */
-function convertKBToTPTPWithComments(kifText, sourceName) {
-    const header = `% TPTP Translation of SUO-KIF Knowledge Base
-% Source: ${sourceName}
-% Generated: ${new Date().toISOString()}
-% Generator: SUO-KIF VSCode Extension
-%
-% Note: This is an automated translation. Some constructs may need
-% manual adjustment for use with specific theorem provers.
-%
-% ============================================================
-
-`;
-
-    const tokens = tokenize(kifText);
-    const mockDoc = { getText: () => kifText, positionAt: () => ({ line: 0, character: 0 }) };
-    const ast = parse(tokens, mockDoc, []);
-
-    let axiomNum = 0;
-    const lines = [];
-    const skipped = [];
-
-    const convertNode = (node, isTopLevel = false) => {
-        if (node.type === 'atom') {
-            let val = node.value;
-            // Handle strings - escape or convert
-            if (val.startsWith('"') && val.endsWith('"')) {
-                // Convert string to a constant
-                const inner = val.slice(1, -1).replace(/[^a-zA-Z0-9]/g, '_');
-                return `str_${inner.substring(0, 50)}`;
-            }
-            // Convert variables
-            if (val.startsWith('?')) {
-                return val.substring(1).toUpperCase();
-            }
-            if (val.startsWith('@')) {
-                // Row variables - convert to regular variable with warning
-                return val.substring(1).toUpperCase() + '_ROW';
-            }
-            // Convert constants - must start with lowercase in TPTP for functions/constants
-            // Relations/predicates can be lowercase
-            if (/^[A-Z]/.test(val)) {
-                // Make first letter lowercase for TPTP
-                return val.charAt(0).toLowerCase() + val.slice(1);
-            }
-            // Handle special characters in names
-            return val.replace(/[^a-zA-Z0-9_]/g, '_');
-        }
-
-        if (node.type === 'list' && node.children.length > 0) {
-            const head = node.children[0];
-            if (head.type !== 'atom') return null;
-
-            const op = head.value;
-            const args = node.children.slice(1).map(c => convertNode(c, false)).filter(x => x !== null);
-
-            switch (op) {
-                case 'and':
-                    if (args.length === 0) return '$true';
-                    if (args.length === 1) return args[0];
-                    return '(' + args.join(' & ') + ')';
-                case 'or':
-                    if (args.length === 0) return '$false';
-                    if (args.length === 1) return args[0];
-                    return '(' + args.join(' | ') + ')';
-                case 'not':
-                    if (args.length === 0) return null;
-                    return '(~ ' + args[0] + ')';
-                case '=>':
-                    if (args.length < 2) return null;
-                    return '(' + args[0] + ' => ' + args[1] + ')';
-                case '<=>':
-                    if (args.length < 2) return null;
-                    return '(' + args[0] + ' <=> ' + args[1] + ')';
-                case 'forall':
-                    if (node.children.length >= 3 && node.children[1].type === 'list') {
-                        const vars = node.children[1].children
-                            .filter(v => v.type === 'atom')
-                            .map(v => {
-                                const name = v.value;
-                                if (name.startsWith('?')) return name.substring(1).toUpperCase();
-                                if (name.startsWith('@')) return name.substring(1).toUpperCase() + '_ROW';
-                                return name.toUpperCase();
-                            });
-                        const body = convertNode(node.children[2], false);
-                        if (!body) return null;
-                        if (vars.length === 0) return body;
-                        return '(! [' + vars.join(', ') + '] : ' + body + ')';
-                    }
-                    return null;
-                case 'exists':
-                    if (node.children.length >= 3 && node.children[1].type === 'list') {
-                        const vars = node.children[1].children
-                            .filter(v => v.type === 'atom')
-                            .map(v => {
-                                const name = v.value;
-                                if (name.startsWith('?')) return name.substring(1).toUpperCase();
-                                if (name.startsWith('@')) return name.substring(1).toUpperCase() + '_ROW';
-                                return name.toUpperCase();
-                            });
-                        const body = convertNode(node.children[2], false);
-                        if (!body) return null;
-                        if (vars.length === 0) return body;
-                        return '(? [' + vars.join(', ') + '] : ' + body + ')';
-                    }
-                    return null;
-                case '=':
-                    if (args.length < 2) return null;
-                    return '(' + args[0] + ' = ' + args[1] + ')';
-                case 'documentation':
-                case 'format':
-                case 'termFormat':
-                    // Skip documentation - return special marker
-                    return null;
-                default:
-                    // Relation/function application
-                    // TPTP predicates should be lowercase
-                    let relName = op;
-                    if (/^[A-Z]/.test(relName)) {
-                        relName = relName.charAt(0).toLowerCase() + relName.slice(1);
-                    }
-                    relName = relName.replace(/[^a-zA-Z0-9_]/g, '_');
-
-                    if (args.length === 0) {
-                        // Propositional constant or nullary predicate
-                        return relName;
-                    }
-                    return relName + '(' + args.join(', ') + ')';
-            }
-        }
-
-        return null;
-    };
-
-    ast.forEach((node, index) => {
-        try {
-            const tptp = convertNode(node, true);
-            if (tptp && tptp !== 'null') {
-                // Try to extract a meaningful name from the axiom
-                let axiomName = `axiom_${++axiomNum}`;
-
-                // Check if it's a specific type of statement for better naming
-                if (node.type === 'list' && node.children.length > 0) {
-                    const head = node.children[0];
-                    if (head.type === 'atom') {
-                        const headVal = head.value;
-                        if (headVal === 'subclass' && node.children.length >= 3) {
-                            const child = node.children[1];
-                            if (child.type === 'atom') {
-                                axiomName = `subclass_${child.value.toLowerCase()}_${axiomNum}`;
-                            }
-                        } else if (headVal === 'instance' && node.children.length >= 3) {
-                            const inst = node.children[1];
-                            if (inst.type === 'atom') {
-                                axiomName = `instance_${inst.value.toLowerCase()}_${axiomNum}`;
-                            }
-                        } else if (headVal === '=>') {
-                            axiomName = `rule_${axiomNum}`;
-                        } else if (headVal === '<=>') {
-                            axiomName = `equivalence_${axiomNum}`;
-                        }
-                    }
-                }
-
-                // Sanitize axiom name
-                axiomName = axiomName.replace(/[^a-zA-Z0-9_]/g, '_');
-
-                lines.push(`fof(${axiomName}, axiom, ${tptp}).`);
-            }
-        } catch (e) {
-            skipped.push(`% Skipped expression at index ${index}: ${e.message}`);
-        }
-    });
-
-    let footer = '';
-    if (skipped.length > 0) {
-        footer = `\n% ============================================================\n% Skipped expressions:\n${skipped.join('\n')}\n`;
-    }
-
-    const stats = `
-% ============================================================
-% Statistics:
-%   Total axioms generated: ${lines.length}
-%   Expressions skipped: ${skipped.length}
-% ============================================================
-
-`;
-
-    return header + stats + lines.join('\n') + footer;
-}
-
-/**
- * Convert a single SUO-KIF expression to TPTP format
+ * Convert a single SUO-KIF expression to TPTP format (for prover queries)
+ * Uses the modular TPTP converter
  */
 function convertToTPTP(kifExpr) {
-    // Basic conversion - this is simplified
-    // A full implementation would need proper parsing
-    const tokens = tokenize(kifExpr);
-    const ast = parse(tokens, { getText: () => kifExpr, positionAt: () => ({ line: 0, character: 0 }) }, []);
+    const tokens = tptpTokenize(kifExpr);
+    const ast = tptpParse(tokens);
 
     if (ast.length === 0) return '';
 
-    const convertNode = (node) => {
-        if (node.type === 'atom') {
-            let val = node.value;
-            // Convert variables
-            if (val.startsWith('?')) {
-                return val.substring(1).toUpperCase();
-            }
-            if (val.startsWith('@')) {
-                return val.substring(1).toUpperCase();
-            }
-            // Convert constants (lowercase in TPTP)
-            if (/^[A-Z]/.test(val)) {
-                return val.toLowerCase();
-            }
-            return val;
-        }
+    const tptp = convertFormula(ast[0], { ...tptpDefaultOptions, addPrefixes: true });
+    if (!tptp) return '';
 
-        if (node.type === 'list' && node.children.length > 0) {
-            const head = node.children[0];
-            if (head.type !== 'atom') return '';
-
-            const op = head.value;
-            const args = node.children.slice(1).map(convertNode);
-
-            switch (op) {
-                case 'and':
-                    return '(' + args.join(' & ') + ')';
-                case 'or':
-                    return '(' + args.join(' | ') + ')';
-                case 'not':
-                    return '~(' + args[0] + ')';
-                case '=>':
-                    return '(' + args[0] + ' => ' + args[1] + ')';
-                case '<=>':
-                    return '(' + args[0] + ' <=> ' + args[1] + ')';
-                case 'forall':
-                    if (node.children.length >= 3 && node.children[1].type === 'list') {
-                        const vars = node.children[1].children
-                            .filter(v => v.type === 'atom')
-                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
-                        const body = convertNode(node.children[2]);
-                        return '(![' + vars.join(',') + ']: ' + body + ')';
-                    }
-                    return '';
-                case 'exists':
-                    if (node.children.length >= 3 && node.children[1].type === 'list') {
-                        const vars = node.children[1].children
-                            .filter(v => v.type === 'atom')
-                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
-                        const body = convertNode(node.children[2]);
-                        return '(?[' + vars.join(',') + ']: ' + body + ')';
-                    }
-                    return '';
-                case '=':
-                    return '(' + args[0] + ' = ' + args[1] + ')';
-                default:
-                    // Relation application
-                    const relName = /^[A-Z]/.test(op) ? op.toLowerCase() : op;
-                    return relName + '(' + args.join(',') + ')';
-            }
-        }
-
-        return '';
-    };
-
-    const tptp = convertNode(ast[0]);
     return `fof(query, conjecture, ${tptp}).`;
 }
 
 /**
- * Convert a knowledge base to TPTP format
+ * Convert a knowledge base to TPTP format (for prover queries)
+ * Uses the modular TPTP converter
  */
 function convertKBToTPTP(kifText) {
-    const tokens = tokenize(kifText);
-    const ast = parse(tokens, { getText: () => kifText, positionAt: () => ({ line: 0, character: 0 }) }, []);
+    const tokens = tptpTokenize(kifText);
+    const ast = tptpParse(tokens);
 
-    let axiomNum = 0;
-    const lines = [];
-
-    const convertNode = (node) => {
-        if (node.type === 'atom') {
-            let val = node.value;
-            if (val.startsWith('?')) return val.substring(1).toUpperCase();
-            if (val.startsWith('@')) return val.substring(1).toUpperCase();
-            if (/^[A-Z]/.test(val)) return val.toLowerCase();
-            return val;
-        }
-
-        if (node.type === 'list' && node.children.length > 0) {
-            const head = node.children[0];
-            if (head.type !== 'atom') return '';
-
-            const op = head.value;
-            const args = node.children.slice(1).map(convertNode);
-
-            switch (op) {
-                case 'and':
-                    return '(' + args.join(' & ') + ')';
-                case 'or':
-                    return '(' + args.join(' | ') + ')';
-                case 'not':
-                    return '~(' + args[0] + ')';
-                case '=>':
-                    return '(' + args[0] + ' => ' + args[1] + ')';
-                case '<=>':
-                    return '(' + args[0] + ' <=> ' + args[1] + ')';
-                case 'forall':
-                    if (node.children.length >= 3 && node.children[1].type === 'list') {
-                        const vars = node.children[1].children
-                            .filter(v => v.type === 'atom')
-                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
-                        const body = convertNode(node.children[2]);
-                        return '(![' + vars.join(',') + ']: ' + body + ')';
-                    }
-                    return '';
-                case 'exists':
-                    if (node.children.length >= 3 && node.children[1].type === 'list') {
-                        const vars = node.children[1].children
-                            .filter(v => v.type === 'atom')
-                            .map(v => v.value.startsWith('?') ? v.value.substring(1).toUpperCase() : v.value);
-                        const body = convertNode(node.children[2]);
-                        return '(?[' + vars.join(',') + ']: ' + body + ')';
-                    }
-                    return '';
-                case '=':
-                    return '(' + args[0] + ' = ' + args[1] + ')';
-                case 'documentation':
-                case 'format':
-                case 'termFormat':
-                    // Skip documentation
-                    return null;
-                default:
-                    const relName = /^[A-Z]/.test(op) ? op.toLowerCase() : op;
-                    return relName + '(' + args.join(',') + ')';
-            }
-        }
-
-        return '';
-    };
-
-    ast.forEach(node => {
-        const tptp = convertNode(node);
-        if (tptp && tptp !== 'null') {
-            lines.push(`fof(axiom${++axiomNum}, axiom, ${tptp}).`);
-        }
+    const result = convertKnowledgeBase(ast, {
+        ...tptpDefaultOptions,
+        addPrefixes: true,
+        includeSourceComments: false
     });
+
+    // Extract just the axiom lines (skip header/footer for prover use)
+    const lines = result.tptp.split('\n').filter(line =>
+        line.startsWith('fof(') || line.startsWith('tff(')
+    );
 
     return lines.join('\n');
 }
@@ -1955,6 +2428,140 @@ function updateDocumentDefinitions(document) {
             });
         }
     }
+}
+
+/**
+ * Parse TPTP file and return document symbols
+ * Extracts formula declarations: fof(name, role, formula).
+ */
+function provideTPTPDocumentSymbols(document) {
+    const symbols = [];
+    const text = document.getText();
+
+    // Pattern to match TPTP annotated formulas: type(name, role, ...)
+    // Handles: thf, tff, tcf, fof, cnf, tpi
+    const formulaPattern = /\b(thf|tff|tcf|fof|cnf|tpi)\s*\(\s*([^,\s]+)\s*,\s*([^,\s]+)/g;
+
+    let match;
+    while ((match = formulaPattern.exec(text)) !== null) {
+        const formulaType = match[1];
+        const formulaName = match[2];
+        const formulaRole = match[3];
+
+        const startOffset = match.index;
+        const startPos = document.positionAt(startOffset);
+
+        // Find the end of this formula (closing paren followed by period)
+        let endOffset = findTPTPFormulaEnd(text, startOffset);
+        const endPos = document.positionAt(endOffset);
+
+        // Find the range of just the formula name for selection
+        const nameStart = text.indexOf(formulaName, startOffset);
+        const nameStartPos = document.positionAt(nameStart);
+        const nameEndPos = document.positionAt(nameStart + formulaName.length);
+
+        const symbolKind = TPTP_ROLES[formulaRole] || vscode.SymbolKind.Null;
+
+        const symbol = new vscode.DocumentSymbol(
+            formulaName,
+            `${formulaType} ${formulaRole}`,
+            symbolKind,
+            new vscode.Range(startPos, endPos),
+            new vscode.Range(nameStartPos, nameEndPos)
+        );
+
+        symbols.push(symbol);
+    }
+
+    // Also extract include directives
+    const includePattern = /\binclude\s*\(\s*'([^']+)'/g;
+    while ((match = includePattern.exec(text)) !== null) {
+        const includePath = match[1];
+        const startOffset = match.index;
+        const startPos = document.positionAt(startOffset);
+
+        let endOffset = text.indexOf(')', startOffset);
+        if (endOffset === -1) endOffset = match.index + match[0].length;
+        else endOffset++; // include the closing paren
+
+        // Check for period after closing paren
+        if (text[endOffset] === '.') endOffset++;
+
+        const endPos = document.positionAt(endOffset);
+
+        const symbol = new vscode.DocumentSymbol(
+            includePath,
+            'include',
+            vscode.SymbolKind.File,
+            new vscode.Range(startPos, endPos),
+            new vscode.Range(startPos, endPos)
+        );
+
+        symbols.push(symbol);
+    }
+
+    return symbols;
+}
+
+/**
+ * Find the end of a TPTP formula (handles nested parentheses)
+ */
+function findTPTPFormulaEnd(text, startOffset) {
+    let i = startOffset;
+    let depth = 0;
+    let inString = false;
+    let inSingleQuote = false;
+    let escaped = false;
+
+    while (i < text.length) {
+        const char = text[i];
+
+        if (escaped) {
+            escaped = false;
+            i++;
+            continue;
+        }
+
+        if (char === '\\') {
+            escaped = true;
+            i++;
+            continue;
+        }
+
+        if (char === '"' && !inSingleQuote) {
+            inString = !inString;
+            i++;
+            continue;
+        }
+
+        if (char === "'" && !inString) {
+            inSingleQuote = !inSingleQuote;
+            i++;
+            continue;
+        }
+
+        if (inString || inSingleQuote) {
+            i++;
+            continue;
+        }
+
+        if (char === '(') {
+            depth++;
+        } else if (char === ')') {
+            depth--;
+            if (depth === 0) {
+                // Found the closing paren, look for the period
+                i++;
+                while (i < text.length && /\s/.test(text[i])) i++;
+                if (i < text.length && text[i] === '.') i++;
+                return i;
+            }
+        }
+
+        i++;
+    }
+
+    return text.length;
 }
 
 module.exports = { activate, deactivate };
