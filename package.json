@@ -178,25 +178,37 @@
           "default": "",
           "description": "Path to SigmaKEE installation or source directory."
         },
-        "suo-kif.useDocker": {
-          "type": "boolean",
-          "default": false,
-          "description": "Use a Docker container for SigmaKEE operations instead of a local installation."
+        "suo-kif.sigmaRuntime": {
+          "type": "string",
+          "enum": ["local", "docker", "native (experimental)"],
+          "default": "local",
+          "description": "How to run Sigma. If set to local, use a local installation, if set to docker, use a running docker instance, if set to native, use the experimental JS implementation of Sigma (not recommended)"
         },
         "suo-kif.dockerImage": {
           "type": "string",
           "default": "adampease/sigmakee",
-          "description": "Docker image to use if suo-kif.useDocker is enabled."
-        },
-        "suo-kif.useNativeJS": {
-          "type": "boolean",
-          "default": false,
-          "description": "Use experimental native JavaScript conversion (not recommended, lacks full context)."
+          "description": "Docker image to use if suo-kif.sigmaRuntime is set to 'docker'."
         },
         "suo-kif.externalKBPath": {
           "type": "string",
           "default": "",
           "description": "Path to an external knowledge base directory (e.g. SUMO) to integrate with."
+        },
+        "suo-kif.configXmlPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Sigma's config.xml file. If not set, the extension will search common locations."
+        },
+        "suo-kif.tptpLang": {
+          "type": "string",
+          "enum": ["fof", "tff", "thf"],
+          "default": "fof",
+          "description": "TPTP output format: fof (first-order), tff (typed first-order), or thf (typed higher-order)."
+        },
+        "suo-kif.enforceKBContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, KB-level operations (workspace conversion, KB export) require working within a configured KB directory. Disable for advanced users who want unrestricted access."
         },
         "suo-kif.formatIndentSize": {
           "type": "number",

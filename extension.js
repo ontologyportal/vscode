@@ -1,3 +1,5 @@
+/* primary extension code for VSCode plugin */
+
 const vscode = require('vscode');
 const { exec } = require('child_process');
 const fs = require('fs');
@@ -9,35 +11,26 @@ const { tokenize: tptpTokenize } = require('./src/parser/tokenizer');
 const { parse: tptpParse, collectFreeVariables } = require('./src/parser/parser');
 const { convertKnowledgeBase, convertFormula, defaultOptions: tptpDefaultOptions } = require('./src/tptp/converter');
 
-const LOGIC_OPS = ['and', 'or', 'not', '=>', '<=>'];
-const QUANTIFIERS = ['forall', 'exists'];
-const DEFINING_RELATIONS = ['instance', 'subclass', 'subrelation', 'domain', 'domainSubclass', 'range', 'rangeSubclass', 'documentation', 'format', 'termFormat'];
+const { LOGIC_OPS, QUANTIFIERS, DEFINING_RELATIONS } = require('./src/const');
+
+const {
+    getSigmaRuntime,
+    getSigmaPath, 
+    findConfigXml, 
+    isWithinConfiguredKB, 
+    getKBConstituentsFromConfig, 
+    runSigmaDocker, 
+    runSigmaConverter 
+} = require('./src/sigma/index');
+
 let symbolMetadata = {};
 let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
 
 // TPTP formula roles for symbol categorization
-const TPTP_ROLES = {
-    'axiom': vscode.SymbolKind.Constant,
-    'hypothesis': vscode.SymbolKind.Variable,
-    'definition': vscode.SymbolKind.Class,
-    'assumption': vscode.SymbolKind.Variable,
-    'lemma': vscode.SymbolKind.Method,
-    'theorem': vscode.SymbolKind.Method,
-    'corollary': vscode.SymbolKind.Method,
-    'conjecture': vscode.SymbolKind.Function,
-    'negated_conjecture': vscode.SymbolKind.Function,
-    'plain': vscode.SymbolKind.Field,
-    'type': vscode.SymbolKind.TypeParameter,
-    'interpretation': vscode.SymbolKind.Interface,
-    'fi_domain': vscode.SymbolKind.Enum,
-    'fi_functors': vscode.SymbolKind.EnumMember,
-    'fi_predicates': vscode.SymbolKind.EnumMember,
-    'unknown': vscode.SymbolKind.Null
-};
-
-const TPTP_FORMULA_TYPES = ['thf', 'tff', 'tcf', 'fof', 'cnf', 'tpi'];
+const { TPTP_ROLES, TPTP_FORMULA_TYPES } = require('./src/tptp');
 
 function activate(context) {
+    // Root function for initializing the extension
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('suo-kif');
     context.subscriptions.push(diagnosticCollection);
 
@@ -54,6 +47,53 @@ function activate(context) {
 
     // Build workspace definitions index on startup
     buildWorkspaceDefinitions();
+
+    // Create KB status bar item
+    const kbStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    kbStatusBarItem.command = 'suo-kif.generateTPTP';
+    context.subscriptions.push(kbStatusBarItem);
+
+    // Function to update KB status bar
+    const updateKBStatusBar = () => {
+        const config = vscode.workspace.getConfiguration('suo-kif');
+        const enforceKBContext = config.get('enforceKBContext') !== false;
+        const kbContext = isWithinConfiguredKB();
+
+        if (kbContext) {
+            kbStatusBarItem.text = `$(database) KB: ${kbContext.kbName || 'Configured'}`;
+            kbStatusBarItem.tooltip = `Working within Sigma KB\nConfig: ${kbContext.configPath}\nClick to generate TPTP`;
+            kbStatusBarItem.backgroundColor = undefined;
+            kbStatusBarItem.show();
+        } else if (findConfigXml()) {
+            if (enforceKBContext) {
+                kbStatusBarItem.text = `$(warning) KB: Outside`;
+                kbStatusBarItem.tooltip = 'Not within a configured KB directory. KB-level operations disabled.\nOpen a folder from your Sigma KBs directory to enable.\nOr disable "suo-kif.enforceKBContext" setting.';
+                kbStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            } else {
+                kbStatusBarItem.text = `$(unlock) KB: Unrestricted`;
+                kbStatusBarItem.tooltip = 'KB enforcement disabled. All operations available.\nClick to generate TPTP';
+                kbStatusBarItem.backgroundColor = undefined;
+            }
+            kbStatusBarItem.show();
+        } else {
+            kbStatusBarItem.hide();
+        }
+    };
+
+    // Update status bar on workspace change, editor change, or config change
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(updateKBStatusBar),
+        vscode.window.onDidChangeActiveTextEditor(updateKBStatusBar),
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('suo-kif.enforceKBContext') ||
+                e.affectsConfiguration('suo-kif.configXmlPath')) {
+                updateKBStatusBar();
+            }
+        })
+    );
+
+    // Initial update
+    updateKBStatusBar();
 
     // Register Definition Provider for F12
     context.subscriptions.push(
@@ -251,7 +291,7 @@ function activate(context) {
     );
 }
 
-function deactivate() {}
+function deactivate() {} // Not needed, no cleanup required
 
 function validateNode(node, diagnostics, metadata) {
     if (!node || node.type !== 'list') return;
@@ -1600,8 +1640,7 @@ async function runProverOnScopeCommand() {
     let tptpContent = '';
     let axiomCount = 0;
 
-    const useDocker = config.get('useDocker');
-    const useNativeJS = config.get('useNativeJS');
+    const { useDocker, useNativeJS } = getSigmaRuntime();
     const sigmaPath = getSigmaPath();
 
     if (useNativeJS) {
@@ -1648,7 +1687,7 @@ async function runProverOnScopeCommand() {
             return;
         }
     } else {
-        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", enable "suo-kif.useDocker", or enable "suo-kif.useNativeJS".');
+        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", or select an alternative sigma runtime');
         return;
     }
 
@@ -1735,33 +1774,100 @@ async function runProverOnScopeCommand() {
 /**
  * Generate TPTP File Command - Opens TPTP conversion in new editor pane
  * Uses Sigma if configured, else uses JS converter
+ * Supports: single file, selection, workspace, or entire KB from config.xml
+ * KB-level operations are only available when working within a configured KB directory
  */
 async function generateTPTPCommand() {
     const editor = vscode.window.activeTextEditor;
-    if (!editor) return;
 
-    const document = editor.document;
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const { useDocker, useNativeJS } = getSigmaRuntime();
+    const dockerImage = config.get('dockerImage') || 'adampease/sigmakee';
+    const sigmaPath = getSigmaPath();
+    const tptpLang = config.get('tptpLang') || 'fof';
+    const enforceKBContext = config.get('enforceKBContext') !== false; // Default true
 
-    // Offer options for what to convert
-    const options = [
-        { label: 'Current File', description: 'Convert the current file to TPTP' },
-        { label: 'Entire Workspace', description: 'Convert all .kif files in workspace to TPTP' },
-        { label: 'Selection Only', description: 'Convert selected text to TPTP' }
-    ];
+    // Check if user is working within a configured KB
+    const kbContext = isWithinConfiguredKB();
+    const isInKB = kbContext !== null;
 
-    const selected = await vscode.window.showQuickPick(options, {
-        placeHolder: 'What would you like to convert to TPTP?'
+    // KB-level operations allowed if within KB or enforcement is disabled
+    const allowKBOperations = isInKB || !enforceKBContext;
+
+    // Build options based on what's available
+    const options = [];
+
+    // Single file/selection options are always available
+    if (editor && editor.document.languageId === 'suo-kif') {
+        options.push({ label: 'Current File', description: 'Convert the current file to TPTP' });
+        options.push({ label: 'Selection Only', description: 'Convert selected text to TPTP' });
+    }
+
+    // KB-level operations only available when within a configured KB (or enforcement disabled)
+    if (allowKBOperations) {
+        options.push({ label: 'Entire Workspace', description: 'Convert all .kif files in workspace to TPTP' });
+
+        // Add config.xml KB export option if Sigma is available
+        if ((useDocker || sigmaPath) && !useNativeJS) {
+            const kbLabel = kbContext?.kbName || 'select KB';
+            options.push({
+                label: 'Knowledge Base from config.xml',
+                description: `Export entire KB defined in Sigma config.xml (${kbLabel})`
+            });
+            options.push({
+                label: 'Custom File Selection',
+                description: 'Select specific .kif files to convert'
+            });
+        }
+    } else {
+        // Not in a KB and enforcement is on - show limited options with explanation
+        if ((useDocker || sigmaPath) && !useNativeJS && findConfigXml()) {
+            options.push({
+                label: '$(warning) Workspace Operations Disabled',
+                description: 'Open a folder within a configured KB to enable workspace/KB operations',
+                disabled: true
+            });
+        }
+    }
+
+    // If no valid options, show error
+    if (options.length === 0 || (options.length === 1 && options[0].disabled)) {
+        vscode.window.showWarningMessage(
+            'No KIF file open. Please open a .kif file to convert to TPTP.'
+        );
+        return;
+    }
+
+    // Filter out disabled options for the picker
+    const pickableOptions = options.filter(o => !o.disabled);
+
+    const selected = await vscode.window.showQuickPick(pickableOptions, {
+        placeHolder: isInKB
+            ? 'What would you like to convert to TPTP?'
+            : 'What would you like to convert to TPTP? (KB operations require opening a KB folder)'
     });
 
     if (!selected) return;
 
     let kifContent = '';
     let sourceName = '';
+    let useFullKBExport = false;
+    let kbConfig = null;
+    let customFiles = null;
 
     if (selected.label === 'Current File') {
-        kifContent = document.getText();
-        sourceName = path.basename(document.fileName, '.kif');
+        if (!editor) return;
+        kifContent = editor.document.getText();
+        sourceName = path.basename(editor.document.fileName, '.kif');
     } else if (selected.label === 'Entire Workspace') {
+        // Double-check KB context (should already be verified, but be safe)
+        if (!allowKBOperations) {
+            vscode.window.showWarningMessage(
+                'Workspace conversion requires opening a folder within a configured knowledge base, or disable "suo-kif.enforceKBContext" setting.'
+            );
+            return;
+        }
+
         const files = await vscode.workspace.findFiles('**/*.kif');
         if (files.length === 0) {
             vscode.window.showWarningMessage('No .kif files found in workspace.');
@@ -1783,12 +1889,57 @@ async function generateTPTPCommand() {
 
         sourceName = 'workspace';
     } else if (selected.label === 'Selection Only') {
-        if (editor.selection.isEmpty) {
+        if (!editor || editor.selection.isEmpty) {
             vscode.window.showWarningMessage('No text selected.');
             return;
         }
-        kifContent = document.getText(editor.selection);
-        sourceName = path.basename(document.fileName, '.kif') + '-selection';
+        kifContent = editor.document.getText(editor.selection);
+        sourceName = path.basename(editor.document.fileName, '.kif') + '-selection';
+    } else if (selected.label.includes('Knowledge Base from config.xml')) {
+        // Double-check KB context
+        if (!allowKBOperations) {
+            vscode.window.showWarningMessage(
+                'KB export requires opening a folder within a configured knowledge base, or disable "suo-kif.enforceKBContext" setting.'
+            );
+            return;
+        }
+
+        // Get KB constituents from config.xml
+        kbConfig = await getKBConstituentsFromConfig(kbContext?.kbName);
+        if (!kbConfig) return;
+
+        useFullKBExport = true;
+        sourceName = kbConfig.kbName;
+    } else if (selected.label === 'Custom File Selection') {
+        // Double-check KB context
+        if (!allowKBOperations) {
+            vscode.window.showWarningMessage(
+                'Custom file selection requires opening a folder within a configured knowledge base, or disable "suo-kif.enforceKBContext" setting.'
+            );
+            return;
+        }
+
+        // Let user select files, defaulting to KB directory if available
+        const defaultUri = kbContext?.kbDir ? vscode.Uri.file(kbContext.kbDir) : undefined;
+        const fileSelection = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: true,
+            filters: { 'KIF Files': ['kif'] },
+            openLabel: 'Select KIF Files',
+            defaultUri: defaultUri
+        });
+
+        if (!fileSelection || fileSelection.length === 0) return;
+
+        customFiles = fileSelection.map(f => f.fsPath);
+        sourceName = 'custom-selection';
+
+        // Read content for JS fallback
+        for (const filePath of customFiles) {
+            kifContent += `; File: ${path.basename(filePath)}\n`;
+            kifContent += fs.readFileSync(filePath, 'utf8') + '\n\n';
+        }
     }
 
     // Convert
@@ -1796,21 +1947,15 @@ async function generateTPTPCommand() {
     let stats = '';
     let generatorInfo = '';
 
-    const config = vscode.workspace.getConfiguration('suo-kif');
-    const useDocker = config.get('useDocker');
-    const dockerImage = config.get('dockerImage') || 'adampease/sigmakee';
-    const useNativeJS = config.get('useNativeJS');
-    const sigmaPath = getSigmaPath();
-
     if (useNativeJS) {
-        // Use JS
+        // Use JS converter
         const tokens = tptpTokenize(kifContent);
         const ast = tptpParse(tokens);
         const result = convertKnowledgeBase(ast, {
             sourceName: sourceName,
             hideNumbers: true,
             addPrefixes: true,
-            lang: 'fof',
+            lang: tptpLang,
             includeSourceComments: false
         });
         tptpContent = result.tptp;
@@ -1818,8 +1963,22 @@ async function generateTPTPCommand() {
         stats = `% Axiom count: ${result.axiomCount}\n`;
     } else if (useDocker || sigmaPath) {
         // Use Sigma (Docker or Local)
-        const contextFiles = await collectFilesForContext();
-        if (!contextFiles) return;
+        let filesToLoad;
+        let action;
+
+        if (useFullKBExport && kbConfig) {
+            // Use KB constituents from config.xml
+            filesToLoad = kbConfig.constituents;
+            action = 'EXPORT_KB';
+        } else if (customFiles) {
+            filesToLoad = customFiles;
+            action = 'CONVERT';
+        } else {
+            // Get context files
+            filesToLoad = await collectFilesForContext();
+            if (!filesToLoad) return;
+            action = 'CONVERT';
+        }
 
         try {
             await vscode.window.withProgress({
@@ -1828,21 +1987,31 @@ async function generateTPTPCommand() {
                 cancellable: false
             }, async (progress) => {
                 if (useDocker) {
-                    tptpContent = await runSigmaDocker(contextFiles, 'CONVERT', kifContent);
+                    tptpContent = await runSigmaDocker(filesToLoad, action, useFullKBExport ? '' : kifContent, tptpLang);
                     generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Dockerized Sigma - Image: ${dockerImage})`;
                 } else {
-                    tptpContent = await runSigmaConverter(sigmaPath, contextFiles, 'CONVERT', kifContent);
+                    tptpContent = await runSigmaConverter(sigmaPath, filesToLoad, action, useFullKBExport ? '' : kifContent, tptpLang);
                     generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Native Sigma - Path: ${sigmaPath})`;
                 }
-                const count = (tptpContent.match(/fof\(/g) || []).length;
-                stats = `% Axiom count: ${count}\n`;
+
+                if (useFullKBExport && kbConfig) {
+                    generatorInfo += `\n% Knowledge Base: ${kbConfig.kbName}`;
+                    generatorInfo += `\n% Config: ${kbConfig.configPath}`;
+                    generatorInfo += `\n% Constituents: ${kbConfig.constituents.length} files`;
+                }
+
+                const fofCount = (tptpContent.match(/fof\(/g) || []).length;
+                const tffCount = (tptpContent.match(/tff\(/g) || []).length;
+                const thfCount = (tptpContent.match(/thf\(/g) || []).length;
+                const totalCount = fofCount + tffCount + thfCount;
+                stats = `% Axiom count: ${totalCount} (fof: ${fofCount}, tff: ${tffCount}, thf: ${thfCount})\n`;
             });
         } catch (err) {
             vscode.window.showErrorMessage(`Sigma conversion failed: ${err.message}`);
             return;
         }
     } else {
-        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", enable "suo-kif.useDocker", or enable "suo-kif.useNativeJS".');
+        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", or enable an alternative sigma runtime');
         return;
     }
 
@@ -1853,36 +2022,72 @@ async function generateTPTPCommand() {
     });
 
     await vscode.window.showTextDocument(tptpDoc, vscode.ViewColumn.Beside);
+
+    // Show summary
+    const axiomCount = (tptpContent.match(/(fof|tff|thf)\(/g) || []).length;
+    vscode.window.showInformationMessage(
+        `TPTP generated: ${axiomCount} axioms from ${sourceName}. Use File > Save As to save.`
+    );
 }
 
 async function collectFilesForContext() {
+    const config = vscode.workspace.getConfiguration('suo-kif');
+    const enforceKBContext = config.get('enforceKBContext') !== false;
+
+    // Check if user is within a configured KB
+    const kbContext = isWithinConfiguredKB();
+
+    if (!kbContext && enforceKBContext) {
+        vscode.window.showWarningMessage(
+            'Context collection requires opening a folder within a configured knowledge base. ' +
+            'Please open a folder from your Sigma KBs directory, or disable "suo-kif.enforceKBContext" setting.'
+        );
+        return null;
+    }
+
     // 1. Ask for Context Mode
     const contextOptions = [
         { label: 'Standalone', description: 'Use only the current workspace files (no external KB)' },
         { label: 'Integrate with External KB', description: 'Load an external KB (e.g. SUMO) and add workspace files' }
     ];
-    
+
+    // If we detected a specific KB, offer to use it directly
+    if (kbContext.kbName) {
+        contextOptions.unshift({
+            label: `Use ${kbContext.kbName} KB`,
+            description: `Use the ${kbContext.kbName} knowledge base from config.xml (Recommended)`
+        });
+    }
+
     const selectedContext = await vscode.window.showQuickPick(contextOptions, {
         placeHolder: 'Select Knowledge Base Context'
     });
-    
+
     if (!selectedContext) return null;
-    
+
     const filesToLoad = [];
-    
-    // 2. If External, get path
-    if (selectedContext.label === 'Integrate with External KB') {
+
+    // 2. Handle the selected context mode
+    if (selectedContext.label.startsWith('Use ') && selectedContext.label.endsWith(' KB')) {
+        // Use KB from config.xml
+        const kbConfig = await getKBConstituentsFromConfig(kbContext.kbName);
+        if (kbConfig) {
+            return kbConfig.constituents;
+        }
+        return null;
+    } else if (selectedContext.label === 'Integrate with External KB') {
         const config = vscode.workspace.getConfiguration('suo-kif');
         let extPath = config.get('externalKBPath');
-        
+
         if (!extPath || !fs.existsSync(extPath)) {
             const selection = await vscode.window.showOpenDialog({
                 canSelectFiles: false,
                 canSelectFolders: true,
                 canSelectMany: false,
-                openLabel: 'Select External KB Directory'
+                openLabel: 'Select External KB Directory',
+                defaultUri: vscode.Uri.file(kbContext.kbDir)
             });
-            
+
             if (selection && selection.length > 0) {
                 extPath = selection[0].fsPath;
                 // Optionally save setting
@@ -1891,445 +2096,19 @@ async function collectFilesForContext() {
                 return null; // Cancelled
             }
         }
-        
+
         // Collect all .kif files in external dir
         if (fs.existsSync(extPath)) {
             const extFiles = fs.readdirSync(extPath).filter(f => f.endsWith('.kif'));
             extFiles.forEach(f => filesToLoad.push(path.join(extPath, f)));
         }
     }
-    
-    // 3. Always add workspace files (unless we want strict mode? user said "workspace as entirety" or "integrate")
-    // If "Standalone" -> Workspace IS the KB.
-    // If "Integrate" -> External + Workspace.
+
+    // 3. Add workspace files
     const workspaceFiles = await vscode.workspace.findFiles('**/*.kif');
     workspaceFiles.forEach(f => filesToLoad.push(f.fsPath));
-    
+
     return filesToLoad;
-}
-
-// Helper to get Sigma Path (reused)
-function getSigmaPath() {
-    // Check config
-    const config = vscode.workspace.getConfiguration('suo-kif');
-    let path = config.get('sigmaPath');
-    
-    // Check env var
-    if (!path && process.env.SIGMA_SRC) {
-        path = process.env.SIGMA_SRC;
-    }
-
-    if (!path) return null;
-    if (fs.existsSync(path)) return path;
-    return null;
-}
-
-async function runSigmaDocker(filesToLoad, action, targetContent = "") {
-    const config = vscode.workspace.getConfiguration('suo-kif');
-    const image = config.get('dockerImage') || 'adampease/sigmakee';
-    const tempDir = os.tmpdir();
-
-    // 1. Prepare Wrapper Source in Temp
-    // Use the same wrapper code as local
-    const wrapperSource = path.join(tempDir, 'SigmaWrapper.java');
-    const wrapperContent = `
-import com.articulate.sigma.*;
-import com.articulate.sigma.trans.*;
-import java.nio.file.*;
-import java.io.*;
-import java.util.*;
-
-public class SigmaWrapper {
-    public static void main(String[] args) {
-        if (args.length < 1) {
-            System.err.println("Usage: SigmaWrapper <params_file>");
-            System.exit(1);
-        }
-
-        try {
-            PrintStream originalOut = System.out;
-            System.setOut(new PrintStream(new OutputStream() { public void write(int b) {} }));
-
-            List<String> lines = Files.readAllLines(Paths.get(args[0]));
-            String action = "";
-            String targetContent = "";
-            List<String> filesToLoad = new ArrayList<>();
-
-            for (String line : lines) {
-                if (line.startsWith("ACTION=")) action = line.substring(7);
-                else if (line.startsWith("TARGET=")) targetContent = line.substring(7).replace("\\\\n", "\\n");
-                else if (line.startsWith("LOAD=")) filesToLoad.add(line.substring(5));
-            }
-
-            KBmanager.getMgr().initializeOnce();
-            
-            String kbName = "VSCodeKB";
-            KB kb = new KB(kbName, "."); 
-            KBmanager.getMgr().addKB(kbName, false);
-            KBmanager.getMgr().setPref("sumokbname", kbName);
-
-            for (String f : filesToLoad) {
-                kb.addConstituent(f);
-            }
-            kb.reload();
-
-            System.setOut(originalOut);
-
-            if ("PROVE".equals(action)) {
-                SUMOKBtoTPTPKB exporter = new SUMOKBtoTPTPKB();
-                exporter.kb = kb;
-                File tempOut = File.createTempFile("sigma_export", ".p");
-                exporter.writeFile(tempOut.getAbsolutePath(), null, false, new PrintWriter(System.out));
-            } else if ("CONVERT".equals(action)) {
-                if (targetContent != null && !targetContent.isEmpty()) {
-                     String tptp = SUMOformulaToTPTPformula.tptpParseSUOKIFString(targetContent, false);
-                     if (tptp != null) System.out.println(tptp);
-                }
-            }
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(1);
-        }
-    }
-}
-`;
-    fs.writeFileSync(wrapperSource, wrapperContent);
-
-    // 2. Determine Mount Points
-    const mounts = [];
-    const remappedFiles = [];
-    
-    // Mount Temp Dir (for Wrapper + Params) -> /wrapper
-    mounts.push(`-v "${tempDir}:/wrapper"`);
-
-    // Determine Workspace Root
-    let workspaceRoot = null;
-    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-        workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        // Docker volume mount: handle spaces? vsCode fsPath usually ok, but quoting is safe.
-        mounts.push(`-v "${workspaceRoot}:/workspace"`);
-    }
-
-    // Determine External KB Path
-    const extKBPath = config.get('externalKBPath');
-    if (extKBPath && fs.existsSync(extKBPath)) {
-        mounts.push(`-v "${extKBPath}:/kb"`);
-    }
-
-    // 3. Remap File Paths
-    const uniqueFiles = [...new Set(filesToLoad)];
-    for (const f of uniqueFiles) {
-        let mapped = f;
-        if (workspaceRoot && f.startsWith(workspaceRoot)) {
-            // Remap to /workspace
-            const rel = path.relative(workspaceRoot, f);
-            mapped = path.join('/workspace', rel);
-        } else if (extKBPath && f.startsWith(extKBPath)) {
-            // Remap to /kb
-            const rel = path.relative(extKBPath, f);
-            mapped = path.join('/kb', rel);
-        } else if (f.startsWith(tempDir)) {
-             // Remap to /wrapper
-             const rel = path.relative(tempDir, f);
-             mapped = path.join('/wrapper', rel);
-        }
-        // Normalize slashes for Linux container
-        mapped = mapped.replace(/\\/g, '/');
-        remappedFiles.push(mapped);
-    }
-
-    // 4. Create Params File
-    const paramsFile = path.join(tempDir, `sigma-params-docker-${Date.now()}.txt`);
-    let paramsContent = `ACTION=${action}\n`;
-    if (targetContent) {
-        paramsContent += `TARGET=${targetContent.replace(/\n/g, '\\n')}\n`;
-    }
-    for (const f of remappedFiles) {
-        paramsContent += `LOAD=${f}\n`;
-    }
-    fs.writeFileSync(paramsFile, paramsContent);
-
-    // 5. Run Docker Command
-    // Classpath: /root/sigmakee/sigmakee.jar + /root/sigmakee/*.jar
-    // Command: java SigmaWrapper.java (JDK 21 supports single file source)
-    const paramsFileName = path.basename(paramsFile);
-    const cmd = `docker run --rm ${mounts.join(' ')} ${image} java -cp "/root/sigmakee/*:/root/sigmakee/sigmakee.jar" /wrapper/SigmaWrapper.java /wrapper/${paramsFileName}`;
-
-    return new Promise((resolve, reject) => {
-        exec(cmd, { maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
-            try { fs.unlinkSync(paramsFile); } catch(e){}
-            // Don't delete wrapperSource immediately as concurrent runs might need it, 
-            // but for simplicity we leave it or cleanup later. 
-            // In temp dir, OS cleans up eventually.
-            
-            if (err) {
-                reject(new Error(`Docker execution failed: ${stderr || err.message}`));
-            } else {
-                resolve(stdout);
-            }
-        });
-    });
-}
-
-async function runSigmaConverter(sigmaHome, filesToLoad, action, targetContent = "") {
-    const cp = await getSigmaClasspath(sigmaHome);
-    const wrapper = await ensureWrapperCompiled(cp);
-    
-    const tempDir = os.tmpdir();
-    const paramsFile = path.join(tempDir, `sigma-params-${Date.now()}.txt`);
-    
-    let params = `ACTION=${action}\n`;
-    if (targetContent) {
-        // Escape newlines for simple parsing
-        params += `TARGET=${targetContent.replace(/\n/g, '\\n')}\n`;
-    }
-    
-    // Dedup files
-    const uniqueFiles = [...new Set(filesToLoad)];
-    for (const f of uniqueFiles) {
-        params += `LOAD=${f}\n`;
-    }
-    
-    fs.writeFileSync(paramsFile, params);
-
-    return new Promise((resolve, reject) => {
-        const cmd = `java -Xmx4g -cp "${cp}" SigmaWrapper "${paramsFile}"`;
-        
-        exec(cmd, { cwd: tempDir, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
-            // Cleanup
-            try { fs.unlinkSync(paramsFile); } catch(e){}
-            
-            if (err) {
-                // If stdout has content, it might be partial output, but usually err means failure
-                // stderr might have helpful info
-                reject(new Error(`Sigma execution failed: ${stderr || err.message}`));
-            } else {
-                resolve(stdout);
-            }
-        });
-    });
-}
-
-async function getSigmaClasspath(sigmaHome) {
-    const parts = [];
-    
-    // 1. Build directory (classes or jar)
-    const buildDir = path.join(sigmaHome, 'build');
-    const classesDir = path.join(buildDir, 'classes');
-    
-    if (fs.existsSync(classesDir)) {
-        parts.push(classesDir);
-    } else {
-        // Look for jar
-        const files = fs.existsSync(buildDir) ? fs.readdirSync(buildDir) : [];
-        const jar = files.find(f => f.endsWith('.jar') && f.includes('sigma'));
-        if (jar) {
-            parts.push(path.join(buildDir, jar));
-        }
-    }
-    
-    // 2. Lib directory
-    const libDir = path.join(sigmaHome, 'lib');
-    if (fs.existsSync(libDir)) {
-        parts.push(path.join(libDir, '*'));
-    }
-    
-    // Add temp dir (for Wrapper)
-    parts.push(os.tmpdir());
-    
-    return parts.join(path.delimiter);
-}
-
-async function ensureWrapperCompiled(classpath) {
-    const tempDir = os.tmpdir();
-    const wrapperSource = path.join(tempDir, 'SigmaWrapper.java');
-    const wrapperClass = path.join(tempDir, 'SigmaWrapper.class');
-    
-    // Always write source to ensure it's up to date
-    const sourceCode = `
-import com.articulate.sigma.*;
-import com.articulate.sigma.trans.*;
-import java.nio.file.*;
-import java.io.*;
-import java.util.*;
-
-public class SigmaWrapper {
-    public static void main(String[] args) {
-        if (args.length < 1) {
-            System.err.println("Usage: SigmaWrapper <params_file>");
-            System.exit(1);
-        }
-
-        try {
-            // Silence stdout during init to prevent noise
-            PrintStream originalOut = System.out;
-            System.setOut(new PrintStream(new OutputStream() { public void write(int b) {} }));
-
-            // Read Params
-            List<String> lines = Files.readAllLines(Paths.get(args[0]));
-            String action = "";
-            String targetContent = "";
-            List<String> filesToLoad = new ArrayList<>();
-
-            for (String line : lines) {
-                if (line.startsWith("ACTION=")) action = line.substring(7);
-                else if (line.startsWith("TARGET=")) targetContent = line.substring(7).replace("\\\\n", "\\n");
-                else if (line.startsWith("LOAD=")) filesToLoad.add(line.substring(5));
-            }
-
-            // Initialize minimal Sigma
-            KBmanager.getMgr().initializeOnce();
-            
-            // Create Custom KB
-            String kbName = "VSCodeKB";
-            KB kb = new KB(kbName, "."); // Base dir doesn't matter as we add constituents manually
-            
-            // Register KB
-            KBmanager.getMgr().addKB(kbName, false);
-            KBmanager.getMgr().setPref("sumokbname", kbName); // Make it default for converters
-
-            // Add constituents
-            for (String f : filesToLoad) {
-                kb.addConstituent(f);
-            }
-            
-            // Load/Parse (build cache)
-            // This is the heavy lifting
-            kb.reload();
-
-            // Restore stdout for output
-            System.setOut(originalOut);
-
-            if ("PROVE".equals(action)) {
-                // Export entire KB to TPTP
-                SUMOKBtoTPTPKB exporter = new SUMOKBtoTPTPKB();
-                exporter.kb = kb;
-                
-                // create temp file for output because writeFile takes a path
-                File tempOut = File.createTempFile("sigma_export", ".p");
-                String resultPath = exporter.writeFile(tempOut.getAbsolutePath(), null, false, new PrintWriter(System.out));
-                
-                // writeFile writes to file AND optionally to pw? 
-                // Sigmakee's code: _tWriteFile takes pw and writes to it.
-                // We passed System.out as pw, so it should be on stdout.
-                
-            } else if ("CONVERT".equals(action)) {
-                // Convert specific content in context of KB
-                // We split by standard delimiter or just parse
-                // Since we passed raw content, treat as one block or split
-                
-                // If content is empty, maybe we are converting a loaded file? 
-                // But targetContent is passed.
-                
-                if (targetContent != null && !targetContent.isEmpty()) {
-                     String tptp = SUMOformulaToTPTPformula.tptpParseSUOKIFString(targetContent, false);
-                     if (tptp != null) System.out.println(tptp);
-                }
-            }
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(1);
-        }
-    }
-}
-`;
-    fs.writeFileSync(wrapperSource, sourceCode);
-    
-    return new Promise((resolve, reject) => {
-        exec(`javac -cp "${classpath}" "${wrapperSource}"`, { cwd: tempDir }, (err, stdout, stderr) => {
-            if (err) {
-                reject(new Error(`Failed to compile SigmaWrapper: ${stderr || err.message}`));
-            } else {
-                resolve(wrapperClass);
-            }
-        });
-    });
-}
-
-/**
- * Convert a single SUO-KIF expression to TPTP format (for prover queries)
- * Uses the modular TPTP converter based on sigmakee's implementation
- */
-async function generateTPTPCommand() {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) return;
-
-    const document = editor.document;
-
-    // Offer options for what to convert
-    const options = [
-        { label: 'Current File', description: 'Convert the current file to TPTP' },
-        { label: 'Entire Workspace', description: 'Convert all .kif files in workspace to TPTP' },
-        { label: 'Selection Only', description: 'Convert selected text to TPTP' }
-    ];
-
-    const selected = await vscode.window.showQuickPick(options, {
-        placeHolder: 'What would you like to convert to TPTP?'
-    });
-
-    if (!selected) return;
-
-    let kifContent = '';
-    let sourceName = '';
-
-    if (selected.label === 'Current File') {
-        kifContent = document.getText();
-        sourceName = path.basename(document.fileName, '.kif');
-    } else if (selected.label === 'Entire Workspace') {
-        const files = await vscode.workspace.findFiles('**/*.kif');
-        if (files.length === 0) {
-            vscode.window.showWarningMessage('No .kif files found in workspace.');
-            return;
-        }
-
-        await vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: 'Generating TPTP...',
-            cancellable: false
-        }, async (progress) => {
-            for (let i = 0; i < files.length; i++) {
-                progress.report({ message: `Processing ${i + 1}/${files.length} files...` });
-                const doc = await vscode.workspace.openTextDocument(files[i]);
-                kifContent += `; File: ${vscode.workspace.asRelativePath(files[i])}\n`;
-                kifContent += doc.getText() + '\n\n';
-            }
-        });
-
-        sourceName = 'workspace';
-    } else if (selected.label === 'Selection Only') {
-        if (editor.selection.isEmpty) {
-            vscode.window.showWarningMessage('No text selected.');
-            return;
-        }
-        kifContent = document.getText(editor.selection);
-        sourceName = path.basename(document.fileName, '.kif') + '-selection';
-    }
-
-    // Parse the KIF content using modular parser
-    const tokens = tptpTokenize(kifContent);
-    const ast = tptpParse(tokens);
-
-    // Convert to TPTP using modular converter
-    const result = convertKnowledgeBase(ast, {
-        sourceName: sourceName,
-        hideNumbers: true,
-        addPrefixes: true,
-        lang: 'fof',
-        includeSourceComments: false
-    });
-
-    // Open as untitled document
-    const tptpDoc = await vscode.workspace.openTextDocument({
-        content: result.tptp,
-        language: 'tptp'  // Will use plaintext if TPTP language not installed
-    });
-
-    await vscode.window.showTextDocument(tptpDoc, vscode.ViewColumn.Beside);
-    vscode.window.showInformationMessage(
-        `TPTP file generated: ${result.axiomCount} axioms, ${result.skippedCount} skipped. Use File > Save As to save it.`
-    );
 }
 
 /**

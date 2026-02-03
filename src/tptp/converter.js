@@ -1,6 +1,9 @@
 /**
  * SUO-KIF to TPTP Converter
  * Based on sigmakee's SUMOformulaToTPTPformula.java
+ * This is a native implementation of the SUO-KIF parser from Sigma
+ * It is currently recommended that users utilize sigma to parse 
+ * SUO-KIF to TPTP
  */
 
 const { NodeType, collectFreeVariables, getValue } = require('../parser');
