@@ -38,7 +38,7 @@ function makeDocument(text, opts = {}) {
             const endOff = lines.slice(0, range.end.line).join('\n').length + (range.end.line > 0 ? 1 : 0) + range.end.character;
             return text.substring(startOff, endOff);
         }),
-        languageId: opts.languageId || 'suo-kif',
+        languageId: opts.languageId || 'sumo',
         uri: { fsPath: opts.fsPath || '/mock/file.kif' },
         fileName: opts.fsPath || '/mock/file.kif',
         lineAt: sinon.stub().callsFake((lineNum) => ({
@@ -291,17 +291,17 @@ describe('Extension Commands (extension.js)', function () {
             ext.activate(context);
 
             const names = v.commands.registerCommand.args.map(a => a[0]);
-            assert(names.includes('suo-kif.searchSymbol'));
-            assert(names.includes('suo-kif.showTaxonomy'));
-            assert(names.includes('suo-kif.formatAxiom'));
-            assert(names.includes('suo-kif.goToDefinition'));
-            assert(names.includes('suo-kif.browseInSigma'));
-            assert(names.includes('suo-kif.checkErrors'));
-            assert(names.includes('suo-kif.queryProver'));
-            assert(names.includes('suo-kif.runProverOnScope'));
-            assert(names.includes('suo-kif.generateTPTP'));
-            assert(names.includes('suo-kif.openKnowledgeBase'));
-            assert(names.includes('suo-kif.createKnowledgeBase'));
+            assert(names.includes('sumo.searchSymbol'));
+            assert(names.includes('sumo.showTaxonomy'));
+            assert(names.includes('sumo.formatAxiom'));
+            assert(names.includes('sumo.goToDefinition'));
+            assert(names.includes('sumo.browseInSigma'));
+            assert(names.includes('sumo.checkErrors'));
+            assert(names.includes('sumo.queryProver'));
+            assert(names.includes('sumo.runProverOnScope'));
+            assert(names.includes('sumo.generateTPTP'));
+            assert(names.includes('sumo.openKnowledgeBase'));
+            assert(names.includes('sumo.createKnowledgeBase'));
         });
 
         it('should push disposables into context.subscriptions', () => {
@@ -328,7 +328,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('openKnowledgeBaseCommand', () => {
         it('should show error when config.xml not found', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns(null);
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -339,19 +339,19 @@ describe('Extension Commands (extension.js)', function () {
         it('should open settings when user clicks Open Settings', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns(null);
             v.window.showErrorMessage.resolves('Open Settings');
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
             assert(v.commands.executeCommand.calledWith(
-                'workbench.action.openSettings', 'suo-kif.sigma.configXmlPath'
+                'workbench.action.openSettings', 'sumo.sigma.configXmlPath'
             ));
         });
 
         it('should show error when config.xml fails to parse', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns('/mock/config.xml');
             sigma.sigmaConfig.parseConfigXmlSync.returns(null);
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -365,7 +365,7 @@ describe('Extension Commands (extension.js)', function () {
                 preferences: {},
                 knowledgeBases: {}
             });
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -383,7 +383,7 @@ describe('Extension Commands (extension.js)', function () {
                 }
             });
             v.window.showQuickPick.resolves({ label: 'SUMO' });
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -402,7 +402,7 @@ describe('Extension Commands (extension.js)', function () {
                 knowledgeBases: { SUMO: { constituents: ['Merge.kif'] } }
             });
             v.window.showQuickPick.resolves({ label: 'SUMO' });
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -419,7 +419,7 @@ describe('Extension Commands (extension.js)', function () {
                 knowledgeBases: { MyKB: { constituents: ['a.kif'] } }
             });
             v.window.showQuickPick.resolves({ label: 'MyKB' });
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -434,7 +434,7 @@ describe('Extension Commands (extension.js)', function () {
                 knowledgeBases: { SUMO: { constituents: ['a.kif'] } }
             });
             v.window.showQuickPick.resolves(undefined);
-            const handler = getCommand('suo-kif.openKnowledgeBase');
+            const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
@@ -448,7 +448,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('createKnowledgeBaseCommand', () => {
         it('should show error when config.xml not found', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns(null);
-            const handler = getCommand('suo-kif.createKnowledgeBase');
+            const handler = getCommand('sumo.createKnowledgeBase');
 
             await handler();
 
@@ -458,7 +458,7 @@ describe('Extension Commands (extension.js)', function () {
         it('should do nothing when user cancels name input', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns('/mock/config.xml');
             v.window.showInputBox.resolves(undefined);
-            const handler = getCommand('suo-kif.createKnowledgeBase');
+            const handler = getCommand('sumo.createKnowledgeBase');
 
             await handler();
 
@@ -469,7 +469,7 @@ describe('Extension Commands (extension.js)', function () {
             sigma.sigmaConfig.findLocalConfigXml.returns('/mock/config.xml');
             v.window.showInputBox.resolves('NewKB');
             v.window.showOpenDialog.resolves(undefined);
-            const handler = getCommand('suo-kif.createKnowledgeBase');
+            const handler = getCommand('sumo.createKnowledgeBase');
 
             await handler();
 
@@ -492,7 +492,7 @@ describe('Extension Commands (extension.js)', function () {
                 });
                 v.window.showInputBox.resolves('TestKB');
                 v.window.showOpenDialog.resolves([{ fsPath: tmpDir }]);
-                const handler = getCommand('suo-kif.createKnowledgeBase');
+                const handler = getCommand('sumo.createKnowledgeBase');
 
                 await handler();
 
@@ -518,7 +518,7 @@ describe('Extension Commands (extension.js)', function () {
                 });
                 v.window.showInputBox.resolves('EmptyKB');
                 v.window.showOpenDialog.resolves([{ fsPath: tmpDir }]);
-                const handler = getCommand('suo-kif.createKnowledgeBase');
+                const handler = getCommand('sumo.createKnowledgeBase');
 
                 await handler();
 
@@ -538,7 +538,7 @@ describe('Extension Commands (extension.js)', function () {
                 v.window.showInputBox.resolves('BadKB');
                 v.window.showOpenDialog.resolves([{ fsPath: tmpDir }]);
                 sigma.sigmaConfig.addKBToConfig.throws(new Error('write failed'));
-                const handler = getCommand('suo-kif.createKnowledgeBase');
+                const handler = getCommand('sumo.createKnowledgeBase');
 
                 await handler();
 
@@ -559,7 +559,7 @@ describe('Extension Commands (extension.js)', function () {
                 v.window.showInputBox.resolves('NewKB');
                 v.window.showOpenDialog.resolves([{ fsPath: tmpDir }]);
                 v.window.showInformationMessage.resolves('Open KB');
-                const handler = getCommand('suo-kif.createKnowledgeBase');
+                const handler = getCommand('sumo.createKnowledgeBase');
 
                 await handler();
 
@@ -577,7 +577,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('browseInSigmaCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.browseInSigma');
+            const handler = getCommand('sumo.browseInSigma');
 
             await handler();
 
@@ -591,7 +591,7 @@ describe('Extension Commands (extension.js)', function () {
                 document: doc,
                 selection: { active: makePosition(0, 1) }
             };
-            const handler = getCommand('suo-kif.browseInSigma');
+            const handler = getCommand('sumo.browseInSigma');
 
             await handler();
 
@@ -605,7 +605,7 @@ describe('Extension Commands (extension.js)', function () {
                 document: doc,
                 selection: { active: makePosition(0, 0) }
             };
-            const handler = getCommand('suo-kif.browseInSigma');
+            const handler = getCommand('sumo.browseInSigma');
 
             await handler();
 
@@ -622,7 +622,7 @@ describe('Extension Commands (extension.js)', function () {
             configStore['sigmaUrl'] = 'http://localhost:8080/sigma/Browse.jsp';
             configStore['knowledgeBase'] = 'SUMO';
             configStore['language'] = 'EnglishLanguage';
-            const handler = getCommand('suo-kif.browseInSigma');
+            const handler = getCommand('sumo.browseInSigma');
 
             await handler();
 
@@ -639,7 +639,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('formatAxiomCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.formatAxiom');
+            const handler = getCommand('sumo.formatAxiom');
 
             await handler();
 
@@ -654,7 +654,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('checkErrorsCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.checkErrors');
+            const handler = getCommand('sumo.checkErrors');
 
             await handler();
 
@@ -664,7 +664,7 @@ describe('Extension Commands (extension.js)', function () {
         it('should report no errors for valid KIF', async () => {
             const doc = makeDocument('(instance Human Animal)');
             v.window.activeTextEditor = { document: doc };
-            const handler = getCommand('suo-kif.checkErrors');
+            const handler = getCommand('sumo.checkErrors');
 
             await handler();
 
@@ -679,7 +679,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('goToDefinitionCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.goToDefinition');
+            const handler = getCommand('sumo.goToDefinition');
 
             await handler();
 
@@ -693,7 +693,7 @@ describe('Extension Commands (extension.js)', function () {
                 document: doc,
                 selection: { active: makePosition(0, 1) }
             };
-            const handler = getCommand('suo-kif.goToDefinition');
+            const handler = getCommand('sumo.goToDefinition');
 
             await handler();
 
@@ -708,7 +708,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('searchSymbolCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.searchSymbol');
+            const handler = getCommand('sumo.searchSymbol');
 
             await handler();
 
@@ -722,7 +722,7 @@ describe('Extension Commands (extension.js)', function () {
                 document: doc,
                 selection: { active: makePosition(0, 1) }
             };
-            const handler = getCommand('suo-kif.searchSymbol');
+            const handler = getCommand('sumo.searchSymbol');
 
             await handler();
 
@@ -736,7 +736,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('queryProverCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.queryProver');
+            const handler = getCommand('sumo.queryProver');
 
             await handler();
 
@@ -750,7 +750,7 @@ describe('Extension Commands (extension.js)', function () {
                 selection: makeRange(0, 0, 0, 23)
             };
             configStore['proverPath'] = undefined;
-            const handler = getCommand('suo-kif.queryProver');
+            const handler = getCommand('sumo.queryProver');
 
             await handler();
 
@@ -765,7 +765,7 @@ describe('Extension Commands (extension.js)', function () {
                 selection: makeRange(0, 0, 0, 23)
             };
             configStore['proverPath'] = '/nonexistent/prover';
-            const handler = getCommand('suo-kif.queryProver');
+            const handler = getCommand('sumo.queryProver');
 
             await handler();
 
@@ -780,7 +780,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('runProverOnScopeCommand', () => {
         it('should do nothing when no editor is active', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.runProverOnScope');
+            const handler = getCommand('sumo.runProverOnScope');
 
             await handler();
 
@@ -791,7 +791,7 @@ describe('Extension Commands (extension.js)', function () {
             const doc = makeDocument('(instance Human Animal)');
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
             configStore['proverPath'] = undefined;
-            const handler = getCommand('suo-kif.runProverOnScope');
+            const handler = getCommand('sumo.runProverOnScope');
 
             await handler();
 
@@ -803,7 +803,7 @@ describe('Extension Commands (extension.js)', function () {
             const doc = makeDocument('(instance Human Animal)');
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
             configStore['proverPath'] = '/does/not/exist';
-            const handler = getCommand('suo-kif.runProverOnScope');
+            const handler = getCommand('sumo.runProverOnScope');
 
             await handler();
 
@@ -819,7 +819,7 @@ describe('Extension Commands (extension.js)', function () {
         it('should warn when no KIF file is open and no KB operations allowed', async () => {
             v.window.activeTextEditor = null;
             sigma.sigmaIndex.isWithinConfiguredKB.returns(null);
-            const handler = getCommand('suo-kif.generateTPTP');
+            const handler = getCommand('sumo.generateTPTP');
 
             await handler();
 
@@ -828,13 +828,13 @@ describe('Extension Commands (extension.js)', function () {
         });
 
         it('should offer Current File and Selection when a .kif file is open', async () => {
-            const doc = makeDocument('(instance Human Animal)', { languageId: 'suo-kif' });
+            const doc = makeDocument('(instance Human Animal)', { languageId: 'sumo' });
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
             sigma.sigmaIndex.isWithinConfiguredKB.returns(null);
             configStore['enforceKBContext'] = true;
             // User cancels the quick pick
             v.window.showQuickPick.resolves(undefined);
-            const handler = getCommand('suo-kif.generateTPTP');
+            const handler = getCommand('sumo.generateTPTP');
 
             await handler();
 
@@ -846,7 +846,7 @@ describe('Extension Commands (extension.js)', function () {
         });
 
         it('should include workspace/KB options when KB context is present', async () => {
-            const doc = makeDocument('(instance Human Animal)', { languageId: 'suo-kif' });
+            const doc = makeDocument('(instance Human Animal)', { languageId: 'sumo' });
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
             sigma.sigmaIndex.isWithinConfiguredKB.returns({
                 kbName: 'SUMO',
@@ -856,7 +856,7 @@ describe('Extension Commands (extension.js)', function () {
             });
             sigma.runtimeMock.useNativeJS = true;
             v.window.showQuickPick.resolves(undefined);
-            const handler = getCommand('suo-kif.generateTPTP');
+            const handler = getCommand('sumo.generateTPTP');
 
             await handler();
 
@@ -869,7 +869,7 @@ describe('Extension Commands (extension.js)', function () {
 
         it('should convert current file using native JS and open result', async () => {
             const kifText = '(instance Human Animal)';
-            const doc = makeDocument(kifText, { languageId: 'suo-kif', fsPath: '/mock/test.kif' });
+            const doc = makeDocument(kifText, { languageId: 'sumo', fsPath: '/mock/test.kif' });
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
             sigma.sigmaIndex.isWithinConfiguredKB.returns(null);
             sigma.sigmaIndex.getSigmaRuntime.returns({ useDocker: false, useNativeJS: true, useLocal: false });
@@ -881,7 +881,7 @@ describe('Extension Commands (extension.js)', function () {
 
             v.window.showQuickPick.resolves({ label: 'Current File' });
             v.workspace.openTextDocument.resolves(doc);
-            const handler = getCommand('suo-kif.generateTPTP');
+            const handler = getCommand('sumo.generateTPTP');
 
             await handler();
 
@@ -894,14 +894,14 @@ describe('Extension Commands (extension.js)', function () {
         });
 
         it('should show error when Sigma is not configured and not using native', async () => {
-            const doc = makeDocument('(instance Human Animal)', { languageId: 'suo-kif' });
+            const doc = makeDocument('(instance Human Animal)', { languageId: 'sumo' });
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
             sigma.sigmaIndex.isWithinConfiguredKB.returns(null);
             sigma.sigmaIndex.getSigmaRuntime.returns({ useDocker: false, useNativeJS: false, useLocal: false });
             sigma.sigmaIndex.getSigmaPath.returns(null);
 
             v.window.showQuickPick.resolves({ label: 'Current File' });
-            const handler = getCommand('suo-kif.generateTPTP');
+            const handler = getCommand('sumo.generateTPTP');
 
             await handler();
 
@@ -916,7 +916,7 @@ describe('Extension Commands (extension.js)', function () {
     describe('showTaxonomyCommand', () => {
         it('should do nothing when no editor is active and no argument given', async () => {
             v.window.activeTextEditor = null;
-            const handler = getCommand('suo-kif.showTaxonomy');
+            const handler = getCommand('sumo.showTaxonomy');
 
             await handler();
 

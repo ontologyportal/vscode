@@ -1,4 +1,4 @@
-/* Define important constants relating to SUO-KIF/Sigma */
+/* Define important constants relating to SUMO/Sigma */
 
 // These are primitives
 const LOGIC_OPS = ['and', 'or', 'not', '=>', '<=>'];

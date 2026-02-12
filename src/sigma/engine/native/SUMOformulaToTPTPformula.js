@@ -1,5 +1,5 @@
 /**
- * SUO-KIF to TPTP formula converter
+ * SUMO to TPTP formula converter
  * Ported from SUMOformulaToTPTPformula.java
  *
  * This code is copyright Articulate Software (c) 2003.
@@ -51,7 +51,7 @@ function setLang(value) {
 }
 
 /**
- * Translate a word from SUO-KIF to TPTP format
+ * Translate a word from SUMO to TPTP format
  * @param {string} st - The token to translate
  * @param {number|string} type - The token type
  * @param {boolean} hasArguments - Whether the token has arguments (is a predicate/function)
@@ -93,7 +93,7 @@ function translateWord(st, type, hasArguments) {
 }
 
 /**
- * Internal translation of SUO-KIF tokens to TPTP
+ * Internal translation of SUMO tokens to TPTP
  * @private
  */
 function translateWord_1(st, type, hasArguments) {
@@ -467,9 +467,9 @@ function process(f, query) {
 }
 
 /**
- * Parse a SUO-KIF string to TPTP format
+ * Parse a SUMO string to TPTP format
  * Main entry point for formula conversion
- * @param {string} suoString - The SUO-KIF formula string
+ * @param {string} suoString - The SUMO formula string
  * @param {boolean} query - Whether this is a query (existential quantification for free vars)
  * @returns {string} The TPTP representation wrapped in parentheses
  */

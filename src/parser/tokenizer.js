@@ -1,6 +1,6 @@
 /**
- * SUO-KIF Tokenizer
- * Converts SUO-KIF source text into a stream of tokens
+ * SUMO Tokenizer
+ * Converts SUMO source text into a stream of tokens
  */
 
 const TokenType = {
@@ -14,8 +14,8 @@ const TokenType = {
 };
 
 /**
- * Tokenize SUO-KIF text into tokens
- * @param {string} text - SUO-KIF source text
+ * Tokenize SUMO text into tokens
+ * @param {string} text - SUMO source text
  * @returns {Array} Array of token objects
  */
 function tokenize(text) {

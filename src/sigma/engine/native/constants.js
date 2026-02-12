@@ -1,5 +1,5 @@
 /**
- * Constants for SUO-KIF formula processing
+ * Constants for SUMO formula processing
  * Ported from Formula.java
  *
  * This code is copyright Articulate Software (c) 2003.

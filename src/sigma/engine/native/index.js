@@ -1,7 +1,7 @@
 /**
- * SUO-KIF to TPTP Converter
+ * SUMO to TPTP Converter
  *
- * This module provides functionality to convert SUO-KIF formulas
+ * This module provides functionality to convert SUMO formulas
  * (as used in SUMO - Suggested Upper Merged Ontology) to TPTP format
  * (as used by automated theorem provers).
  *

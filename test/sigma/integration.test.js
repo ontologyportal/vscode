@@ -1,5 +1,5 @@
 /**
- * Integration tests for SUO-KIF to TPTP conversion
+ * Integration tests for SUMO to TPTP conversion
  */
 
 const { expect } = require('chai');

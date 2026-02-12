@@ -94,7 +94,7 @@ async function compileDocker(runtime, outputChannel) {
         return;
     }
 
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const image = config.get('sigma.dockerImage') || 'apease/sigmakee';
     const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
@@ -236,7 +236,7 @@ async function compileFormulasDocker(runtime, formula, outputChannel) {
         return;
     }
 
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const image = config.get('sigma.dockerImage') || 'apease/sigmakee';
     
     // Escape quotes for the shell command inside Docker

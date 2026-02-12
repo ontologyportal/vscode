@@ -11,7 +11,7 @@ let lastRuntimeType = null;
  */
 function getSigmaRuntime() {
     // Check config from vscode
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const runtime = config.get('sigma.runtime') || 'local';
     
     if (runtimeInstance && lastRuntimeType === runtime) {
@@ -109,7 +109,7 @@ class DockerRuntime extends SigmaRuntime {
     async getContainerId() {
         if (this._containerId) return this._containerId;
         try {
-            const config = vscode.workspace.getConfiguration('suo-kif');
+            const config = vscode.workspace.getConfiguration('sumo');
             const image = config.get('sigma.dockerImage') || 'apease/sigmakee';
             const containers = await this.docker.listContainers({
                 filters: { ancestor: [image], status: ['running'] }

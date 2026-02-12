@@ -1,5 +1,5 @@
 /**
- * Formula class for SUO-KIF representation
+ * Formula class for SUMO representation
  * Ported from Formula.java
  *
  * This code is copyright Articulate Software (c) 2003.
@@ -18,7 +18,7 @@ const { emptyString, isQuotedString } = require('./utils/StringUtil.js');
 class Formula {
     /**
      * Create a new Formula
-     * @param {string} [formulaStr] - The SUO-KIF formula string
+     * @param {string} [formulaStr] - The SUMO formula string
      */
     constructor(formulaStr) {
         this.theFormula = formulaStr || '';

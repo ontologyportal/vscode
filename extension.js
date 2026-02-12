@@ -61,7 +61,7 @@ async function openKnowledgeBaseCommand() {
             'Open Settings'
         );
         if (action === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.sigma.configXmlPath');
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.sigma.configXmlPath');
         }
         return;
     }
@@ -101,7 +101,7 @@ async function createKnowledgeBaseCommand() {
             'Open Settings'
         );
         if (action === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.sigma.configXmlPath');
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.sigma.configXmlPath');
         }
         return;
     }
@@ -166,33 +166,33 @@ async function createKnowledgeBaseCommand() {
 
 function activate(context) {
     // Root function for initializing the extension
-    const diagnosticCollection = vscode.languages.createDiagnosticCollection('suo-kif');
+    const diagnosticCollection = vscode.languages.createDiagnosticCollection('sumo');
     context.subscriptions.push(diagnosticCollection);
 
     // Register Commands
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.searchSymbol', searchSymbolCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.showTaxonomy', showTaxonomyCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.formatAxiom', formatAxiomCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.goToDefinition', goToDefinitionCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.browseInSigma', browseInSigmaCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.checkErrors', checkErrorsCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.queryProver', queryProverCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.runProverOnScope', runProverOnScopeCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.generateTPTP', generateTPTPCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.openKnowledgeBase', openKnowledgeBaseCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.createKnowledgeBase', createKnowledgeBaseCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.searchSymbol', searchSymbolCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.showTaxonomy', showTaxonomyCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.formatAxiom', formatAxiomCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.goToDefinition', goToDefinitionCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.browseInSigma', browseInSigmaCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.checkErrors', checkErrorsCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.queryProver', queryProverCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.runProverOnScope', runProverOnScopeCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.generateTPTP', generateTPTPCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.openKnowledgeBase', openKnowledgeBaseCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.createKnowledgeBase', createKnowledgeBaseCommand));
 
     // Build workspace definitions index on startup
     buildWorkspaceDefinitions();
 
     // Create KB status bar item
     const kbStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    kbStatusBarItem.command = 'suo-kif.generateTPTP';
+    kbStatusBarItem.command = 'sumo.generateTPTP';
     context.subscriptions.push(kbStatusBarItem);
 
     // Function to update KB status bar
     const updateKBStatusBar = () => {
-        const config = vscode.workspace.getConfiguration('suo-kif');
+        const config = vscode.workspace.getConfiguration('sumo');
         const enforceKBContext = config.get('enforceKBContext') !== false;
         const kbContext = isWithinConfiguredKB();
 
@@ -204,7 +204,7 @@ function activate(context) {
         } else if (findConfigXml()) {
             if (enforceKBContext) {
                 kbStatusBarItem.text = `$(warning) KB: Outside`;
-                kbStatusBarItem.tooltip = 'Not within a configured KB directory. KB-level operations disabled.\nOpen a folder from your Sigma KBs directory to enable.\nOr disable "suo-kif.enforceKBContext" setting.';
+                kbStatusBarItem.tooltip = 'Not within a configured KB directory. KB-level operations disabled.\nOpen a folder from your Sigma KBs directory to enable.\nOr disable "sumo.enforceKBContext" setting.';
                 kbStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
             } else {
                 kbStatusBarItem.text = `$(unlock) KB: Unrestricted`;
@@ -222,8 +222,8 @@ function activate(context) {
         vscode.workspace.onDidChangeWorkspaceFolders(updateKBStatusBar),
         vscode.window.onDidChangeActiveTextEditor(updateKBStatusBar),
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('suo-kif.enforceKBContext') ||
-                e.affectsConfiguration('suo-kif.configXmlPath')) {
+            if (e.affectsConfiguration('sumo.enforceKBContext') ||
+                e.affectsConfiguration('sumo.configXmlPath')) {
                 updateKBStatusBar();
             }
         })
@@ -234,7 +234,7 @@ function activate(context) {
 
     // Register Definition Provider for F12
     context.subscriptions.push(
-        vscode.languages.registerDefinitionProvider('suo-kif', {
+        vscode.languages.registerDefinitionProvider('sumo', {
             provideDefinition(document, position, token) {
                 return provideDefinition(document, position);
             }
@@ -243,7 +243,7 @@ function activate(context) {
 
     // Register Document Formatting Provider
     context.subscriptions.push(
-        vscode.languages.registerDocumentFormattingEditProvider('suo-kif', {
+        vscode.languages.registerDocumentFormattingEditProvider('sumo', {
             provideDocumentFormattingEdits(document) {
                 return formatDocument(document);
             }
@@ -252,7 +252,7 @@ function activate(context) {
 
     // Register Selection Formatting Provider
     context.subscriptions.push(
-        vscode.languages.registerDocumentRangeFormattingEditProvider('suo-kif', {
+        vscode.languages.registerDocumentRangeFormattingEditProvider('sumo', {
             provideDocumentRangeFormattingEdits(document, range) {
                 return formatRange(document, range);
             }
@@ -260,7 +260,7 @@ function activate(context) {
     );
 
     const validate = (document) => {
-        if (document.languageId !== 'suo-kif') return;
+        if (document.languageId !== 'sumo') return;
 
         const diagnostics = [];
         const text = document.getText();
@@ -289,7 +289,7 @@ function activate(context) {
 
     // Hover Provider
     context.subscriptions.push(
-        vscode.languages.registerHoverProvider('suo-kif', {
+        vscode.languages.registerHoverProvider('sumo', {
             provideHover(document, position, token) {
                 const range = document.getWordRangeAtPosition(position);
                 if (!range) return;
@@ -306,7 +306,7 @@ function activate(context) {
 
     // Completion Provider
     context.subscriptions.push(
-        vscode.languages.registerCompletionItemProvider('suo-kif', {
+        vscode.languages.registerCompletionItemProvider('sumo', {
             provideCompletionItems(document, position, token, context) {
                 const items = [];
                 for (const [key, val] of Object.entries(symbolMetadata)) {
@@ -336,7 +336,7 @@ function activate(context) {
 
     // Signature Help Provider
     context.subscriptions.push(
-        vscode.languages.registerSignatureHelpProvider('suo-kif', {
+        vscode.languages.registerSignatureHelpProvider('sumo', {
             provideSignatureHelp(document, position, token) {
                 const text = document.getText();
                 const offset = document.offsetAt(position);
@@ -410,7 +410,7 @@ function activate(context) {
                     const pLabel = ` ?arg${i}: ${type}`;
                     label += pLabel;
                     const paramDoc = new vscode.MarkdownString(`**Type**: `);
-                    paramDoc.appendCodeblock(type, 'suo-kif');
+                    paramDoc.appendCodeblock(type, 'sumo');
                     params.push(new vscode.ParameterInformation(pLabel, paramDoc));
                 }
                 label += ')';
@@ -512,7 +512,7 @@ function validateOperand(node, diagnostics) {
                 return;
             }
 
-            // Check SUO-KIF conventions
+            // Check SUMO conventions
             const firstChar = val.charAt(0);
             
             // Relations start with lowercase
@@ -601,7 +601,7 @@ function parse(tokens, document, diagnostics) {
 
 function collectMetadata(ast) {
     const metadata = {}; // { symbol: { domains: { pos: type }, documentation: "" } }
-    const targetLang = vscode.workspace.getConfiguration('suo-kif').get('language') || 'EnglishLanguage';
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('language') || 'EnglishLanguage';
     
     const visit = (node) => {
         if (node.type === 'list' && node.children.length >= 4) {
@@ -779,7 +779,7 @@ async function showTaxonomyCommand(argSymbol) {
                     updateWebview(message.symbol);
                     return;
                 case 'searchSymbol':
-                    vscode.commands.executeCommand('suo-kif.searchSymbol', message.symbol);
+                    vscode.commands.executeCommand('sumo.searchSymbol', message.symbol);
                     return;
             }
         },
@@ -795,7 +795,7 @@ async function buildWorkspaceTaxonomy() {
     const parentGraph = {}; // child -> [parents]
     const childGraph = {}; // parent -> [children]
     const docMap = {}; // symbol -> { text, lang }
-    const targetLang = vscode.workspace.getConfiguration('suo-kif').get('language') || 'EnglishLanguage';
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('language') || 'EnglishLanguage';
 
     for (const file of files) {
         const doc = await vscode.workspace.openTextDocument(file);
@@ -1084,7 +1084,7 @@ function findEnclosingSExpression(document, position) {
  * Format an S-expression with standard SUMO indentation
  */
 function formatSExpression(text) {
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const indentSize = config.get('formatIndentSize') || 2;
 
     const tokens = tokenize(text);
@@ -1412,7 +1412,7 @@ async function browseInSigmaCommand() {
         return;
     }
 
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const sigmaUrl = config.get('sigmaUrl') || 'http://sigma.ontologyportal.org:8080/sigma/Browse.jsp';
     const kb = config.get('knowledgeBase') || 'SUMO';
     const lang = config.get('language') || 'EnglishLanguage';
@@ -1444,7 +1444,7 @@ async function checkErrorsCommand() {
     validateArity(ast, diagnostics, metadata);
     validateRelationUsage(ast, diagnostics, metadata);
 
-    const collection = vscode.languages.createDiagnosticCollection('suo-kif-check');
+    const collection = vscode.languages.createDiagnosticCollection('sumo-check');
     collection.set(document.uri, diagnostics);
 
     if (diagnostics.length === 0) {
@@ -1489,7 +1489,7 @@ function validateVariables(ast, diagnostics) {
             const val = node.value;
             if ((val.startsWith('?') || val.startsWith('@')) && !scope.has(val)) {
                 // Free variable - this is allowed but we can inform
-                // In SUO-KIF, free variables are implicitly universally quantified
+                // In SUMO, free variables are implicitly universally quantified
             }
         }
     };
@@ -1570,7 +1570,7 @@ async function queryProverCommand() {
     }
 
     const query = document.getText(range);
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const prover = config.get('theoremProver');
     vscode.window.showInformationMessage(prover);
 
@@ -1580,11 +1580,11 @@ async function queryProverCommand() {
 
     if (!proverPath) {
         const configure = await vscode.window.showErrorMessage(
-            'Theorem prover path not configured. Please set suo-kif.prover.path in settings.',
+            'Theorem prover path not configured. Please set sumo.prover.path in settings.',
             'Open Settings'
         );
         if (configure === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.prover.path');
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.prover.path');
         }
         return;
     }
@@ -1595,7 +1595,7 @@ async function queryProverCommand() {
         return;
     }
 
-    // Convert SUO-KIF to TPTP format
+    // Convert SUMO to TPTP format
     const tptpQuery = convertToTPTP(query);
 
     // Create temp file for query
@@ -1649,7 +1649,7 @@ async function queryProverCommand() {
                 }
 
                 // Create output panel
-                const outputChannel = vscode.window.createOutputChannel('SUO-KIF Prover');
+                const outputChannel = vscode.window.createOutputChannel('SUMO Prover');
                 outputChannel.clear();
                 outputChannel.appendLine(`Query: ${query}`);
                 outputChannel.appendLine('='.repeat(60));
@@ -1698,7 +1698,7 @@ async function runProverOnScopeCommand() {
     if (!editor) return;
 
     const document = editor.document;
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const prover = config.get('theoremProver');
     const proverPath = prover.path;
     const proverType = prover.type || 'vampire';
@@ -1706,11 +1706,11 @@ async function runProverOnScopeCommand() {
 
     if (!proverPath) {
         const configure = await vscode.window.showErrorMessage(
-            'Theorem prover path not configured. Please set suo-kif.prover.path in settings.',
+            'Theorem prover path not configured. Please set sumo.prover.path in settings.',
             'Open Settings'
         );
         if (configure === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.prover.path');
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.prover.path');
         }
         return;
     }
@@ -1818,7 +1818,7 @@ async function runProverOnScopeCommand() {
             return;
         }
     } else {
-        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", or select an alternative sigma runtime');
+        vscode.window.showErrorMessage('Sigma not configured. Please set "sumo.sigmaPath", or select an alternative sigma runtime');
         return;
     }
 
@@ -1856,7 +1856,7 @@ async function runProverOnScopeCommand() {
                     return;
                 }
 
-                const outputChannel = vscode.window.createOutputChannel('SUO-KIF Prover');
+                const outputChannel = vscode.window.createOutputChannel('SUMO Prover');
                 outputChannel.clear();
                 outputChannel.appendLine(`Scope: ${selected.label}`);
                 outputChannel.appendLine(`Source: ${sourceName}`);
@@ -1911,7 +1911,7 @@ async function runProverOnScopeCommand() {
 async function generateTPTPCommand() {
     const editor = vscode.window.activeTextEditor;
 
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const { useDocker, useNativeJS } = getSigmaRuntime();
     const dockerImage = config.get('dockerImage') || 'apease/sigmakee';
     const sigmaPath = getSigmaPath();
@@ -1929,7 +1929,7 @@ async function generateTPTPCommand() {
     const options = [];
 
     // Single file/selection options are always available
-    if (editor && editor.document.languageId === 'suo-kif') {
+    if (editor && editor.document.languageId === 'sumo') {
         options.push({ label: 'Current File', description: 'Convert the current file to TPTP' });
         options.push({ label: 'Selection Only', description: 'Convert selected text to TPTP' });
     }
@@ -1994,7 +1994,7 @@ async function generateTPTPCommand() {
         // Double-check KB context (should already be verified, but be safe)
         if (!allowKBOperations) {
             vscode.window.showWarningMessage(
-                'Workspace conversion requires opening a folder within a configured knowledge base, or disable "suo-kif.enforceKBContext" setting.'
+                'Workspace conversion requires opening a folder within a configured knowledge base, or disable "sumo.enforceKBContext" setting.'
             );
             return;
         }
@@ -2030,7 +2030,7 @@ async function generateTPTPCommand() {
         // Double-check KB context
         if (!allowKBOperations) {
             vscode.window.showWarningMessage(
-                'KB export requires opening a folder within a configured knowledge base, or disable "suo-kif.enforceKBContext" setting.'
+                'KB export requires opening a folder within a configured knowledge base, or disable "sumo.enforceKBContext" setting.'
             );
             return;
         }
@@ -2045,7 +2045,7 @@ async function generateTPTPCommand() {
         // Double-check KB context
         if (!allowKBOperations) {
             vscode.window.showWarningMessage(
-                'Custom file selection requires opening a folder within a configured knowledge base, or disable "suo-kif.enforceKBContext" setting.'
+                'Custom file selection requires opening a folder within a configured knowledge base, or disable "sumo.enforceKBContext" setting.'
             );
             return;
         }
@@ -2097,7 +2097,7 @@ async function generateTPTPCommand() {
         outputChannel.append(result);
 
         tptpContent = result.content;
-        generatorInfo = '% Generated by: SUO-KIF VSCode Extension (Native Sigma JS Converter)';
+        generatorInfo = '% Generated by: SUMO VSCode Extension (Native Sigma JS Converter)';
 
         if (useFullKBExport && kbConfig) {
             generatorInfo += `\n% Knowledge Base: ${kbConfig.kbName}`;
@@ -2135,9 +2135,9 @@ async function generateTPTPCommand() {
                 tptpContent = result.content;
 
                 if (useDocker) {
-                    generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Dockerized Sigma - Image: ${dockerImage})`;
+                    generatorInfo = `% Generated by: SUMO VSCode Extension (Dockerized Sigma - Image: ${dockerImage})`;
                 } else {
-                    generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Native Sigma - Path: ${sigmaPath})`;
+                    generatorInfo = `% Generated by: SUMO VSCode Extension (Native Sigma - Path: ${sigmaPath})`;
                 }
 
                 if (useFullKBExport && kbConfig) {
@@ -2157,7 +2157,7 @@ async function generateTPTPCommand() {
             return;
         }
     } else {
-        vscode.window.showErrorMessage('Sigma not configured. Please set "suo-kif.sigmaPath", or enable an alternative sigma runtime');
+        vscode.window.showErrorMessage('Sigma not configured. Please set "sumo.sigmaPath", or enable an alternative sigma runtime');
         return;
     }
 
@@ -2177,7 +2177,7 @@ async function generateTPTPCommand() {
 }
 
 async function collectFilesForContext() {
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const enforceKBContext = config.get('enforceKBContext') !== false;
 
     // Check if user is within a configured KB
@@ -2186,7 +2186,7 @@ async function collectFilesForContext() {
     if (!kbContext && enforceKBContext) {
         vscode.window.showWarningMessage(
             'Context collection requires opening a folder within a configured knowledge base. ' +
-            'Please open a folder from your Sigma KBs directory, or disable "suo-kif.enforceKBContext" setting.'
+            'Please open a folder from your Sigma KBs directory, or disable "sumo.enforceKBContext" setting.'
         );
         return null;
     }
@@ -2222,7 +2222,7 @@ async function collectFilesForContext() {
         }
         return null;
     } else if (selectedContext.label === 'Integrate with External KB') {
-        const config = vscode.workspace.getConfiguration('suo-kif');
+        const config = vscode.workspace.getConfiguration('sumo');
         let extPath = config.get('externalKBPath');
 
         if (!extPath || !fs.existsSync(extPath)) {
@@ -2258,7 +2258,7 @@ async function collectFilesForContext() {
 }
 
 /**
- * Convert a single SUO-KIF expression to TPTP format (for prover queries)
+ * Convert a single SUMO expression to TPTP format (for prover queries)
  * Uses the sigma native converter
  */
 function convertToTPTP(kifExpr) {

@@ -1,12 +1,12 @@
-# SUO-KIF VSCode Extension
+# SUMO VSCode Extension
 
-A development environment for [SUO-KIF](suo-kif.pdf) and [TPTP](https://www.tptp.org/) in Visual Studio Code. Provides language support, code intelligence, SigmaKEE integration, and theorem proving for working with the [SUMO](https://www.ontologyportal.org/) ontology and related knowledge bases.
+A development environment for [SUMO](sumo.pdf) and [TPTP](https://www.tptp.org/) in Visual Studio Code. Provides language support, code intelligence, SigmaKEE integration, and theorem proving for working with the [SUMO](https://www.ontologyportal.org/) ontology and related knowledge bases.
 
 ## Supported Languages
 
 | Language | File Extensions | Description |
 |----------|----------------|-------------|
-| SUO-KIF  | `.kif` | Standard Upper Ontology Knowledge Interchange Format |
+| SUMO  | `.kif` | Standard Upper Ontology Knowledge Interchange Format |
 | TPTP     | `.p`, `.tptp`, `.ax` | Thousands of Problems for Theorem Provers |
 
 Both languages include syntax highlighting, bracket matching, and auto-closing pairs. TPTP files additionally support code folding for formula declarations and block comments (`/* */`).
@@ -40,7 +40,7 @@ All commands are available from the Command Palette (`Ctrl+Shift+P`). Commands m
 
 | Command | Description |
 |---------|-------------|
-| **Generate TPTP File** **(ctx)** | Converts SUO-KIF to TPTP format. Offers multiple scope options: current file, selection only, entire workspace, full KB export from `config.xml`, or custom file selection. KB-level operations (workspace conversion, KB export) require working within a configured KB directory unless `enforceKBContext` is disabled. Opens the result in a new editor pane and reports the axiom count. Supports `fof`, `tff`, and `thf` output formats. |
+| **Generate TPTP File** **(ctx)** | Converts SUMO to TPTP format. Offers multiple scope options: current file, selection only, entire workspace, full KB export from `config.xml`, or custom file selection. KB-level operations (workspace conversion, KB export) require working within a configured KB directory unless `enforceKBContext` is disabled. Opens the result in a new editor pane and reports the axiom count. Supports `fof`, `tff`, and `thf` output formats. |
 
 ### Theorem Proving
 
@@ -111,7 +111,7 @@ Clicking the status bar item triggers TPTP generation. The status updates automa
 
 ## Sigma Runtime Modes
 
-The extension uses SigmaKEE to convert SUO-KIF to TPTP. Three runtime modes are available, configured via `suo-kif.sigma.runtime`:
+The extension uses SigmaKEE to convert SUMO to TPTP. Three runtime modes are available, configured via `sumo.sigma.runtime`:
 
 ### Native JS (`native (experimental)`)
 
@@ -119,7 +119,7 @@ A pure JavaScript re-implementation of Sigma's conversion pipeline built into th
 
 ### Local (`local`)
 
-Uses a local SigmaKEE installation invoked via Java. Requires the `SIGMA_SRC` or `SIGMA_CP` environment variable, or the `suo-kif.sigma.srcPath` setting to point to the Sigma source directory.
+Uses a local SigmaKEE installation invoked via Java. Requires the `SIGMA_SRC` or `SIGMA_CP` environment variable, or the `sumo.sigma.srcPath` setting to point to the Sigma source directory.
 
 ### Docker (`docker`)
 
@@ -131,31 +131,31 @@ Uses a running Docker container with the Sigma image. Automatically locates a ru
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `suo-kif.general.language` | `EnglishLanguage` | Language for documentation strings. |
-| `suo-kif.general.formatIndentSize` | `2` | Spaces per indentation level when formatting. |
+| `sumo.general.language` | `EnglishLanguage` | Language for documentation strings. |
+| `sumo.general.formatIndentSize` | `2` | Spaces per indentation level when formatting. |
 
 ### Sigma
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `suo-kif.sigma.runtime` | `local` | Runtime mode: `local`, `docker`, or `native (experimental)`. |
-| `suo-kif.sigma.url` | `http://sigma.ontologyportal.org:8080/sigma/Browse.jsp` | URL of the Sigma KB browser for the Browse command. |
-| `suo-kif.sigma.knowledgeBase` | `SUMO` | Knowledge base name to use in the Sigma browser. |
-| `suo-kif.sigma.srcPath` | *(empty)* | Path to SigmaKEE source directory. Falls back to `$SIGMA_SRC`. |
-| `suo-kif.sigma.homePath` | *(empty)* | Path to SigmaKEE home directory. Falls back to `$SIGMA_HOME`. |
-| `suo-kif.sigma.dockerImage` | `apease/sigmakee` | Docker image for the Docker runtime. |
-| `suo-kif.sigma.externalKBPath` | *(empty)* | Path to an external KB directory (e.g. SUMO) for integration during TPTP generation. |
-| `suo-kif.sigma.configXmlPath` | *(empty)* | Explicit path to Sigma's `config.xml`. If unset, the extension searches `$SIGMA_HOME/KBs/`, `~/.sigmakee/KBs/`, `~/sigmakee/KBs/`, and other common locations. |
-| `suo-kif.sigma.enforceKBContext` | `true` | When enabled, KB-level operations require the workspace to be within a configured KB directory. Disable for unrestricted access. |
+| `sumo.sigma.runtime` | `local` | Runtime mode: `local`, `docker`, or `native (experimental)`. |
+| `sumo.sigma.url` | `http://sigma.ontologyportal.org:8080/sigma/Browse.jsp` | URL of the Sigma KB browser for the Browse command. |
+| `sumo.sigma.knowledgeBase` | `SUMO` | Knowledge base name to use in the Sigma browser. |
+| `sumo.sigma.srcPath` | *(empty)* | Path to SigmaKEE source directory. Falls back to `$SIGMA_SRC`. |
+| `sumo.sigma.homePath` | *(empty)* | Path to SigmaKEE home directory. Falls back to `$SIGMA_HOME`. |
+| `sumo.sigma.dockerImage` | `apease/sigmakee` | Docker image for the Docker runtime. |
+| `sumo.sigma.externalKBPath` | *(empty)* | Path to an external KB directory (e.g. SUMO) for integration during TPTP generation. |
+| `sumo.sigma.configXmlPath` | *(empty)* | Explicit path to Sigma's `config.xml`. If unset, the extension searches `$SIGMA_HOME/KBs/`, `~/.sigmakee/KBs/`, `~/sigmakee/KBs/`, and other common locations. |
+| `sumo.sigma.enforceKBContext` | `true` | When enabled, KB-level operations require the workspace to be within a configured KB directory. Disable for unrestricted access. |
 
 ### Theorem Prover
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `suo-kif.theoremProver.path` | *(empty)* | Path to the theorem prover executable. |
-| `suo-kif.theoremProver.type` | `vampire` | Prover type: `vampire` or `eprover`. |
-| `suo-kif.theoremProver.timeout` | `30` | Prover timeout in seconds. |
-| `suo-kif.theoremProver.tptpLang` | `fof` | TPTP output format: `fof` (first-order), `tff` (typed first-order), or `thf` (typed higher-order). |
+| `sumo.theoremProver.path` | *(empty)* | Path to the theorem prover executable. |
+| `sumo.theoremProver.type` | `vampire` | Prover type: `vampire` or `eprover`. |
+| `sumo.theoremProver.timeout` | `30` | Prover timeout in seconds. |
+| `sumo.theoremProver.tptpLang` | `fof` | TPTP output format: `fof` (first-order), `tff` (typed first-order), or `thf` (typed higher-order). |
 
 ## Requirements
 
@@ -186,7 +186,7 @@ npx vsce package
 
 - [SUMO (Suggested Upper Merged Ontology)](https://www.ontologyportal.org/)
 - [Sigma Knowledge Engineering Environment](https://github.com/ontologyportal/sigmakee)
-- [SUO-KIF Specification](suo-kif.pdf)
+- [SUMO Specification](sumo.pdf)
 - [TPTP Problem Library](https://www.tptp.org/)
 - [Vampire Theorem Prover](https://vprover.github.io/)
 - [E Theorem Prover](https://wwwlehre.dhbw-stuttgart.de/~sschulz/E/E.html)

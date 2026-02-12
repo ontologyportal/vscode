@@ -1,5 +1,5 @@
 /**
- * SUO-KIF Parser Module
+ * SUMO Parser Module
  */
 
 const { TokenType, tokenize } = require('./tokenizer');

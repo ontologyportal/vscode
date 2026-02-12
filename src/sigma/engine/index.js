@@ -17,7 +17,7 @@ const { getSigmaRuntime, SigmaRuntime } = require('./runtime');
  * @returns {string | null}
  */
 function getConfigEnvFallback(configVar, runtime, envVar) {
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
     const v = config.get(configVar);
     if (v != null && v !== '') return v;
     return runtime.getEnvironmentVar(envVar);

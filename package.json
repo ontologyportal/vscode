@@ -1,8 +1,8 @@
 {
-  "name": "suo-kif",
-  "displayName": "SUO-KIF",
+  "name": "sumo",
+  "displayName": "SUMO",
   "icon": "extension-icon.png",
-  "description": "Full-featured SUO-KIF/SUMO and TPTP development environment for VSCode",
+  "description": "Full-featured SUMO/SUMO and TPTP development environment for VSCode",
   "version": "2.0.0",
   "publisher": "ontologyportal",
   "repository": {
@@ -13,13 +13,15 @@
   "scripts": {
     "test": "mocha test/**/*.test.js",
     "test:watch": "mocha --watch test/**/*.test.js",
-    "lint": "node --check extension.js && node --check src/**/*.js"
+    "lint": "node --check extension.js && node --check src/**/*.js",
+    "build": "vsce package"
   },
   "devDependencies": {
     "chai": "^4.5.0",
     "mocha": "^10.2.0",
     "proxyquire": "^2.1.3",
-    "sinon": "^15.0.0"
+    "sinon": "^15.0.0",
+    "@vscode/vsce": "^3.7.1"
   },
   "engines": {
     "vscode": "^1.70.0"
@@ -31,121 +33,121 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:suo-kif",
+    "onLanguage:sumo",
     "onLanguage:tptp"
   ],
   "contributes": {
     "commands": [
       {
-        "command": "suo-kif.searchSymbol",
-        "title": "SUO-KIF: Search Symbol in Workspace"
+        "command": "sumo.searchSymbol",
+        "title": "SUMO: Search Symbol in Workspace"
       },
       {
-        "command": "suo-kif.showTaxonomy",
-        "title": "SUO-KIF: Show Class Taxonomy"
+        "command": "sumo.showTaxonomy",
+        "title": "SUMO: Show Class Taxonomy"
       },
       {
-        "command": "suo-kif.formatAxiom",
-        "title": "SUO-KIF: Format Axiom"
+        "command": "sumo.formatAxiom",
+        "title": "SUMO: Format Axiom"
       },
       {
-        "command": "suo-kif.goToDefinition",
-        "title": "SUO-KIF: Go to Definition"
+        "command": "sumo.goToDefinition",
+        "title": "SUMO: Go to Definition"
       },
       {
-        "command": "suo-kif.browseInSigma",
-        "title": "SUO-KIF: Browse Term in Sigma"
+        "command": "sumo.browseInSigma",
+        "title": "SUMO: Browse Term in Sigma"
       },
       {
-        "command": "suo-kif.checkErrors",
-        "title": "SUO-KIF: Check for Errors"
+        "command": "sumo.checkErrors",
+        "title": "SUMO: Check for Errors"
       },
       {
-        "command": "suo-kif.queryProver",
-        "title": "SUO-KIF: Query with Theorem Prover"
+        "command": "sumo.queryProver",
+        "title": "SUMO: Query with Theorem Prover"
       },
       {
-        "command": "suo-kif.runProverOnScope",
-        "title": "SUO-KIF: Run Prover on..."
+        "command": "sumo.runProverOnScope",
+        "title": "SUMO: Run Prover on..."
       },
       {
-        "command": "suo-kif.generateTPTP",
-        "title": "SUO-KIF: Generate TPTP File"
+        "command": "sumo.generateTPTP",
+        "title": "SUMO: Generate TPTP File"
       },
       {
-        "command": "suo-kif.openKnowledgeBase",
-        "title": "SUO-KIF: Open Knowledge Base"
+        "command": "sumo.openKnowledgeBase",
+        "title": "SUMO: Open Knowledge Base"
       },
       {
-        "command": "suo-kif.createKnowledgeBase",
-        "title": "SUO-KIF: Create Knowledge Base"
+        "command": "sumo.createKnowledgeBase",
+        "title": "SUMO: Create Knowledge Base"
       }
     ],
     "keybindings": [
       {
-        "command": "suo-kif.formatAxiom",
+        "command": "sumo.formatAxiom",
         "key": "ctrl+shift+f",
         "mac": "cmd+shift+f",
-        "when": "editorLangId == suo-kif && editorHasSelection"
+        "when": "editorLangId == sumo && editorHasSelection"
       },
       {
-        "command": "suo-kif.goToDefinition",
+        "command": "sumo.goToDefinition",
         "key": "f12",
         "mac": "f12",
-        "when": "editorLangId == suo-kif"
+        "when": "editorLangId == sumo"
       },
       {
-        "command": "suo-kif.browseInSigma",
+        "command": "sumo.browseInSigma",
         "key": "ctrl+shift+b",
         "mac": "cmd+shift+b",
-        "when": "editorLangId == suo-kif"
+        "when": "editorLangId == sumo"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "suo-kif.searchSymbol",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.searchSymbol",
+          "when": "editorLangId == sumo",
           "group": "navigation@1"
         },
         {
-          "command": "suo-kif.goToDefinition",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.goToDefinition",
+          "when": "editorLangId == sumo",
           "group": "navigation@2"
         },
         {
-          "command": "suo-kif.showTaxonomy",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.showTaxonomy",
+          "when": "editorLangId == sumo",
           "group": "navigation@3"
         },
         {
-          "command": "suo-kif.browseInSigma",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.browseInSigma",
+          "when": "editorLangId == sumo",
           "group": "navigation@4"
         },
         {
-          "command": "suo-kif.formatAxiom",
-          "when": "editorLangId == suo-kif && editorHasSelection",
+          "command": "sumo.formatAxiom",
+          "when": "editorLangId == sumo && editorHasSelection",
           "group": "1_modification@1"
         },
         {
-          "command": "suo-kif.checkErrors",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.checkErrors",
+          "when": "editorLangId == sumo",
           "group": "1_modification@2"
         },
         {
-          "command": "suo-kif.queryProver",
-          "when": "editorLangId == suo-kif && editorHasSelection",
+          "command": "sumo.queryProver",
+          "when": "editorLangId == sumo && editorHasSelection",
           "group": "1_modification@3"
         },
         {
-          "command": "suo-kif.runProverOnScope",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.runProverOnScope",
+          "when": "editorLangId == sumo",
           "group": "1_modification@4"
         },
         {
-          "command": "suo-kif.generateTPTP",
-          "when": "editorLangId == suo-kif",
+          "command": "sumo.generateTPTP",
+          "when": "editorLangId == sumo",
           "group": "1_modification@5"
         }
       ]
@@ -154,12 +156,12 @@
       {
         "title": "General",
         "properties": {
-          "suo-kif.general.language": {
+          "sumo.general.language": {
             "type": "string",
             "default": "EnglishLanguage",
             "description": "The language to use for documentation strings (e.g. EnglishLanguage)."
           },
-          "suo-kif.general.formatIndentSize": {
+          "sumo.general.formatIndentSize": {
             "type": "number",
             "default": 2,
             "description": "Number of spaces for each indentation level when formatting."
@@ -169,27 +171,27 @@
       {
         "title": "Sigma",
         "properties": {
-          "suo-kif.sigma.url": {
+          "sumo.sigma.url": {
             "type": "string",
             "default": "http://sigma.ontologyportal.org:8080/sigma/Browse.jsp",
             "description": "URL of the Sigma KB browser. Defaults to using the public version"
           },
-          "suo-kif.sigma.knowledgeBase": {
+          "sumo.sigma.knowledgeBase": {
             "type": "string",
             "default": "SUMO",
             "description": "Knowledge base to use in Sigma browser (e.g., SUMO)."
           },
-          "suo-kif.sigma.srcPath": {
+          "sumo.sigma.srcPath": {
             "type": "string",
             "default": "",
             "description": "Path to SigmaKEE installation or source directory (if not specified, will try to use $SIGMA_SRC)"
           },
-          "suo-kif.sigma.homePath": {
+          "sumo.sigma.homePath": {
             "type": "string",
             "default": "",
             "description": "Path to SigmaKEE home directory. If not specified, will use $SIGMA_HOME."
           },
-          "suo-kif.sigma.runtime": {
+          "sumo.sigma.runtime": {
             "type": "string",
             "enum": [
               "local",
@@ -199,22 +201,22 @@
             "default": "local",
             "description": "How to run Sigma. If set to local, use a local installation, if set to docker, use a running docker instance, if set to native, use the experimental JS implementation of Sigma (not recommended)"
           },
-          "suo-kif.sigma.dockerImage": {
+          "sumo.sigma.dockerImage": {
             "type": "string",
             "default": "apease/sigmakee",
-            "description": "Docker image to use if suo-kif.sigmaRuntime is set to 'docker'."
+            "description": "Docker image to use if sumo.sigmaRuntime is set to 'docker'."
           },
-          "suo-kif.sigma.externalKBPath": {
+          "sumo.sigma.externalKBPath": {
             "type": "string",
             "default": "",
             "description": "Path to an external knowledge base directory (e.g. SUMO) to integrate with."
           },
-          "suo-kif.sigma.configXmlPath": {
+          "sumo.sigma.configXmlPath": {
             "type": "string",
             "default": "",
             "description": "Path to Sigma's config.xml file. If not set, the extension will search common locations."
           },
-          "suo-kif.sigma.enforceKBContext": {
+          "sumo.sigma.enforceKBContext": {
             "type": "boolean",
             "default": true,
             "description": "When enabled, KB-level operations (workspace conversion, KB export) require working within a configured KB directory. Disable for advanced users who want unrestricted access."
@@ -225,12 +227,12 @@
         "title": "Theorem Prover",
         "description": "Settings relating to using a theorem prover within VSCode",
         "properties": {
-          "suo-kif.theoremProver.path": {
+          "sumo.theoremProver.path": {
             "type": "string",
             "default": "",
             "description": "Path to theorem prover executable (Vampire or E-Prover)."
           },
-          "suo-kif.theoremProver.type": {
+          "sumo.theoremProver.type": {
             "type": "string",
             "enum": [
               "vampire",
@@ -239,12 +241,12 @@
             "default": "vampire",
             "description": "Type of theorem prover to use."
           },
-          "suo-kif.theoremProver.timeout": {
+          "sumo.theoremProver.timeout": {
             "type": "number",
             "default": 30,
             "description": "Timeout in seconds for theorem prover queries."
           },
-          "suo-kif.theoremProver.tptpLang": {
+          "sumo.theoremProver.tptpLang": {
             "type": "string",
             "enum": [
               "fof",
@@ -259,9 +261,9 @@
     ],
     "languages": [
       {
-        "id": "suo-kif",
+        "id": "sumo",
         "aliases": [
-          "SUO-KIF",
+          "SUMO",
           "KIF"
         ],
         "icon": {

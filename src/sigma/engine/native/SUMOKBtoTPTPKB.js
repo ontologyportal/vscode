@@ -163,7 +163,7 @@ function filterAxiom(form, tptp, alreadyWritten) {
 
 /**
  * Convert an array of formulas to TPTP format
- * @param {string[]} formulas - Array of SUO-KIF formula strings
+ * @param {string[]} formulas - Array of SUMO formula strings
  * @param {string} kbName - Name of the knowledge base
  * @param {string|null} conjecture - Optional conjecture formula
  * @param {boolean} isQuestion - Whether the conjecture is a question
@@ -237,7 +237,7 @@ function convertFormulas(formulas, kbName, conjecture = null, isQuestion = false
 /**
  * Write formulas to a TPTP file
  * @param {string} fileName - The output file path
- * @param {string[]} formulas - Array of SUO-KIF formula strings
+ * @param {string[]} formulas - Array of SUMO formula strings
  * @param {string} kbName - Name of the knowledge base
  * @param {string|null} conjecture - Optional conjecture formula
  * @param {boolean} isQuestion - Whether the conjecture is a question

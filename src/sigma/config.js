@@ -62,7 +62,7 @@ async function parseConfigXml(configPath) {
  */
 async function findConfigXml(runtime) {
     const activeRuntime = getSigmaRuntime();
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
 
     // 1. Check explicit setting
     const configPath = config.get('configXmlPath');
@@ -138,7 +138,7 @@ async function findConfigXml(runtime) {
  * @returns {string|null} Path to config.xml or null
  */
 function findLocalConfigXml() {
-    const config = vscode.workspace.getConfiguration('suo-kif');
+    const config = vscode.workspace.getConfiguration('sumo');
 
     // 1. Check explicit setting
     const configPath = config.get('sigma.configXmlPath');

@@ -1,6 +1,6 @@
 /**
- * SUO-KIF Parser
- * Parses tokenized SUO-KIF into an Abstract Syntax Tree (AST)
+ * SUMO Parser
+ * Parses tokenized SUMO into an Abstract Syntax Tree (AST)
  * This is used by the extension to performn symbol lookup
  */
 
