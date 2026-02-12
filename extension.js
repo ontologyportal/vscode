@@ -6,28 +6,163 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Import modular components
-const { tokenize: tptpTokenize } = require('./src/parser/tokenizer');
-const { parse: tptpParse, collectFreeVariables } = require('./src/parser/parser');
-const { convertKnowledgeBase, convertFormula, defaultOptions: tptpDefaultOptions } = require('./src/tptp/converter');
-
 const { LOGIC_OPS, QUANTIFIERS, DEFINING_RELATIONS } = require('./src/const');
 
 const {
     getSigmaRuntime,
-    getSigmaPath, 
-    findConfigXml, 
-    isWithinConfiguredKB, 
-    getKBConstituentsFromConfig, 
-    runSigmaDocker, 
-    runSigmaConverter 
+    getSigmaPath,
+    findConfigXml,
+    isWithinConfiguredKB,
+    getKBConstituentsFromConfig,
+    runSigma
 } = require('./src/sigma/index');
+
+const {
+    findLocalConfigXml,
+    parseConfigXmlSync,
+    addKBToConfig
+} = require('./src/sigma/config');
+
+const {
+    parseKIFFormulas,
+    convertFormulas,
+    tptpParseSUOKIFString,
+    setLanguage
+} = require('./src/sigma/engine/native/index.js');
 
 let symbolMetadata = {};
 let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
 
 // TPTP formula roles for symbol categorization
-const { TPTP_ROLES, TPTP_FORMULA_TYPES } = require('./src/tptp');
+const TPTP_ROLES = {
+    'axiom': vscode.SymbolKind.Constant,
+    'hypothesis': vscode.SymbolKind.Variable,
+    'definition': vscode.SymbolKind.Class,
+    'assumption': vscode.SymbolKind.Variable,
+    'lemma': vscode.SymbolKind.Method,
+    'theorem': vscode.SymbolKind.Method,
+    'corollary': vscode.SymbolKind.Method,
+    'conjecture': vscode.SymbolKind.Function,
+    'negated_conjecture': vscode.SymbolKind.Function,
+    'plain': vscode.SymbolKind.Field,
+    'type': vscode.SymbolKind.TypeParameter,
+    'interpretation': vscode.SymbolKind.Interface,
+    'fi_domain': vscode.SymbolKind.Enum,
+    'fi_functors': vscode.SymbolKind.EnumMember,
+    'fi_predicates': vscode.SymbolKind.EnumMember,
+    'unknown': vscode.SymbolKind.Null
+};
+
+async function openKnowledgeBaseCommand() {
+    const configPath = findLocalConfigXml();
+    if (!configPath) {
+        const action = await vscode.window.showErrorMessage(
+            'Could not find Sigma config.xml. Set the path in settings.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.sigma.configXmlPath');
+        }
+        return;
+    }
+
+    const parsed = parseConfigXmlSync(configPath);
+    if (!parsed) {
+        vscode.window.showErrorMessage('Failed to parse config.xml at: ' + configPath);
+        return;
+    }
+
+    const kbNames = Object.keys(parsed.knowledgeBases);
+    if (kbNames.length === 0) {
+        vscode.window.showWarningMessage('No knowledge bases found in config.xml');
+        return;
+    }
+
+    const selected = await vscode.window.showQuickPick(
+        kbNames.map(name => ({
+            label: name,
+            description: `${parsed.knowledgeBases[name].constituents.length} constituent files`
+        })),
+        { placeHolder: 'Select Knowledge Base to open' }
+    );
+    if (!selected) return;
+
+    const kbDir = parsed.preferences.kbDir || path.dirname(configPath);
+    const folderUri = vscode.Uri.file(kbDir);
+
+    vscode.commands.executeCommand('vscode.openFolder', folderUri, true);
+}
+
+async function createKnowledgeBaseCommand() {
+    const configPath = findLocalConfigXml();
+    if (!configPath) {
+        const action = await vscode.window.showErrorMessage(
+            'Could not find Sigma config.xml. Set the path in settings or create one first.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.sigma.configXmlPath');
+        }
+        return;
+    }
+
+    const kbName = await vscode.window.showInputBox({
+        prompt: 'Enter a name for the new Knowledge Base',
+        placeHolder: 'e.g. MyOntology',
+        validateInput: (value) => {
+            if (!value || !value.trim()) return 'Name is required';
+            if (/[<>"&]/.test(value)) return 'Name cannot contain XML special characters';
+            return null;
+        }
+    });
+    if (!kbName) return;
+
+    const folderUris = await vscode.window.showOpenDialog({
+        canSelectFolders: true,
+        canSelectFiles: false,
+        canSelectMany: false,
+        openLabel: 'Select KB Folder'
+    });
+    if (!folderUris || folderUris.length === 0) return;
+
+    const folderPath = folderUris[0].fsPath;
+
+    // Scan for .kif files
+    const kifFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.kif'));
+    if (kifFiles.length === 0) {
+        vscode.window.showWarningMessage('No .kif files found in selected folder. The KB will have no constituents.');
+    }
+
+    // Build constituent filenames (relative to kbDir if possible)
+    const parsed = parseConfigXmlSync(configPath);
+    const kbDir = parsed && parsed.preferences.kbDir ? parsed.preferences.kbDir : path.dirname(configPath);
+    const filenames = kifFiles.map(f => {
+        const abs = path.join(folderPath, f);
+        const rel = path.relative(kbDir, abs);
+        // Use relative path if it doesn't escape kbDir
+        if (!rel.startsWith('..')) return rel;
+        return abs;
+    });
+
+    try {
+        addKBToConfig(configPath, kbName, filenames);
+    } catch (e) {
+        vscode.window.showErrorMessage('Failed to update config.xml: ' + e.message);
+        return;
+    }
+
+    const action = await vscode.window.showInformationMessage(
+        `Knowledge Base "${kbName}" created with ${filenames.length} constituent(s).`,
+        'Open KB'
+    );
+    if (action === 'Open KB') {
+        const folderUri = vscode.Uri.file(folderPath);
+        vscode.workspace.updateWorkspaceFolders(
+            (vscode.workspace.workspaceFolders || []).length, 0,
+            { uri: folderUri, name: `KB: ${kbName}` }
+        );
+    }
+}
 
 function activate(context) {
     // Root function for initializing the extension
@@ -44,6 +179,8 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.queryProver', queryProverCommand));
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.runProverOnScope', runProverOnScopeCommand));
     context.subscriptions.push(vscode.commands.registerCommand('suo-kif.generateTPTP', generateTPTPCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.openKnowledgeBase', openKnowledgeBaseCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('suo-kif.createKnowledgeBase', createKnowledgeBaseCommand));
 
     // Build workspace definitions index on startup
     buildWorkspaceDefinitions();
@@ -1434,17 +1571,20 @@ async function queryProverCommand() {
 
     const query = document.getText(range);
     const config = vscode.workspace.getConfiguration('suo-kif');
-    const proverPath = config.get('proverPath');
-    const proverType = config.get('proverType') || 'vampire';
-    const timeout = config.get('proverTimeout') || 30;
+    const prover = config.get('theoremProver');
+    vscode.window.showInformationMessage(prover);
+
+    const proverPath = prover.get('path');
+    const proverType = prover.get('type');
+    const timeout = prover.get('timeout') || 30;
 
     if (!proverPath) {
         const configure = await vscode.window.showErrorMessage(
-            'Theorem prover path not configured. Please set suo-kif.proverPath in settings.',
+            'Theorem prover path not configured. Please set suo-kif.prover.path in settings.',
             'Open Settings'
         );
         if (configure === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.proverPath');
+            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.prover.path');
         }
         return;
     }
@@ -1559,17 +1699,18 @@ async function runProverOnScopeCommand() {
 
     const document = editor.document;
     const config = vscode.workspace.getConfiguration('suo-kif');
-    const proverPath = config.get('proverPath');
-    const proverType = config.get('proverType') || 'vampire';
-    const timeout = config.get('proverTimeout') || 30;
+    const prover = config.get('theoremProver');
+    const proverPath = prover.path;
+    const proverType = prover.type || 'vampire';
+    const timeout = prover.timeout || 30;
 
     if (!proverPath) {
         const configure = await vscode.window.showErrorMessage(
-            'Theorem prover path not configured. Please set suo-kif.proverPath in settings.',
+            'Theorem prover path not configured. Please set suo-kif.prover.path in settings.',
             'Open Settings'
         );
         if (configure === 'Open Settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.proverPath');
+            vscode.commands.executeCommand('workbench.action.openSettings', 'suo-kif.prover.path');
         }
         return;
     }
@@ -1642,19 +1783,14 @@ async function runProverOnScopeCommand() {
 
     const { useDocker, useNativeJS } = getSigmaRuntime();
     const sigmaPath = getSigmaPath();
+    const tptpLang = config.get('tptpLang') || 'fof';
 
     if (useNativeJS) {
-         // Fallback to JS
-        const tokens = tptpTokenize(kifContent);
-        const ast = tptpParse(tokens);
-        const result = convertKnowledgeBase(ast, {
-            sourceName: sourceName,
-            hideNumbers: true,
-            addPrefixes: true,
-            lang: 'fof',
-            includeSourceComments: false
-        });
-        tptpContent = result.tptp;
+        // Use sigma native converter
+        setLanguage(tptpLang);
+        const formulas = parseKIFFormulas(kifContent);
+        const result = convertFormulas(formulas, sourceName, null, false);
+        tptpContent = result.content;
         axiomCount = result.axiomCount;
     } else if (useDocker || sigmaPath) {
         // Use Sigma
@@ -1672,15 +1808,10 @@ async function runProverOnScopeCommand() {
                     fs.writeFileSync(tmpKif, kifContent);
                     contextFiles.push(tmpKif);
                 }
-                
-                if (useDocker) {
-                    tptpContent = await runSigmaDocker(contextFiles, 'PROVE', null);
-                } else {
-                    tptpContent = await runSigmaConverter(sigmaPath, contextFiles, 'PROVE', null);
-                }
-                
-                // Count roughly
-                axiomCount = (tptpContent.match(/fof\(/g) || []).length;
+
+                const result = await runSigma(contextFiles, 'PROVE', null, tptpLang);
+                tptpContent = result.content;
+                axiomCount = result.axiomCount;
             });
         } catch (err) {
             vscode.window.showErrorMessage(`Sigma conversion failed: ${err.message}`);
@@ -1782,7 +1913,7 @@ async function generateTPTPCommand() {
 
     const config = vscode.workspace.getConfiguration('suo-kif');
     const { useDocker, useNativeJS } = getSigmaRuntime();
-    const dockerImage = config.get('dockerImage') || 'adampease/sigmakee';
+    const dockerImage = config.get('dockerImage') || 'apease/sigmakee';
     const sigmaPath = getSigmaPath();
     const tptpLang = config.get('tptpLang') || 'fof';
     const enforceKBContext = config.get('enforceKBContext') !== false; // Default true
@@ -1808,7 +1939,7 @@ async function generateTPTPCommand() {
         options.push({ label: 'Entire Workspace', description: 'Convert all .kif files in workspace to TPTP' });
 
         // Add config.xml KB export option if Sigma is available
-        if ((useDocker || sigmaPath) && !useNativeJS) {
+        if (useDocker || sigmaPath || useNativeJS) {
             const kbLabel = kbContext?.kbName || 'select KB';
             options.push({
                 label: 'Knowledge Base from config.xml',
@@ -1821,7 +1952,7 @@ async function generateTPTPCommand() {
         }
     } else {
         // Not in a KB and enforcement is on - show limited options with explanation
-        if ((useDocker || sigmaPath) && !useNativeJS && findConfigXml()) {
+        if ((useDocker || sigmaPath || useNativeJS) && findConfigXml()) {
             options.push({
                 label: '$(warning) Workspace Operations Disabled',
                 description: 'Open a folder within a configured KB to enable workspace/KB operations',
@@ -1948,18 +2079,32 @@ async function generateTPTPCommand() {
     let generatorInfo = '';
 
     if (useNativeJS) {
-        // Use JS converter
-        const tokens = tptpTokenize(kifContent);
-        const ast = tptpParse(tokens);
-        const result = convertKnowledgeBase(ast, {
-            sourceName: sourceName,
-            hideNumbers: true,
-            addPrefixes: true,
-            lang: tptpLang,
-            includeSourceComments: false
-        });
-        tptpContent = result.tptp;
-        generatorInfo = '% Generated by: SUO-KIF VSCode Extension (Integrated JS Converter - Experimental)';
+        // Use sigma native converter
+        let result;
+
+        if (useFullKBExport && kbConfig) {
+            result = await runSigma(kbConfig.constituents, 'EXPORT_KB', '', tptpLang);
+        } else if (customFiles) {
+            result = await runSigma(customFiles, 'CONVERT', '', tptpLang);
+        } else {
+            setLanguage(tptpLang);
+            const formulas = parseKIFFormulas(kifContent);
+            result = convertFormulas(formulas, sourceName, null, false);
+        }
+
+        const outputChannel = vscode.window.createOutputChannel("Sigma Compilation 2");
+        outputChannel.append("Hi!");
+        outputChannel.append(result);
+
+        tptpContent = result.content;
+        generatorInfo = '% Generated by: SUO-KIF VSCode Extension (Native Sigma JS Converter)';
+
+        if (useFullKBExport && kbConfig) {
+            generatorInfo += `\n% Knowledge Base: ${kbConfig.kbName}`;
+            generatorInfo += `\n% Config: ${kbConfig.configPath}`;
+            generatorInfo += `\n% Constituents: ${kbConfig.constituents.length} files`;
+        }
+
         stats = `% Axiom count: ${result.axiomCount}\n`;
     } else if (useDocker || sigmaPath) {
         // Use Sigma (Docker or Local)
@@ -1986,11 +2131,12 @@ async function generateTPTPCommand() {
                 title: useDocker ? 'Converting via Sigma Docker...' : 'Converting via local Sigma...',
                 cancellable: false
             }, async (progress) => {
+                const result = await runSigma(filesToLoad, action, useFullKBExport ? '' : kifContent, tptpLang);
+                tptpContent = result.content;
+
                 if (useDocker) {
-                    tptpContent = await runSigmaDocker(filesToLoad, action, useFullKBExport ? '' : kifContent, tptpLang);
                     generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Dockerized Sigma - Image: ${dockerImage})`;
                 } else {
-                    tptpContent = await runSigmaConverter(sigmaPath, filesToLoad, action, useFullKBExport ? '' : kifContent, tptpLang);
                     generatorInfo = `% Generated by: SUO-KIF VSCode Extension (Native Sigma - Path: ${sigmaPath})`;
                 }
 
@@ -2113,36 +2259,24 @@ async function collectFilesForContext() {
 
 /**
  * Convert a single SUO-KIF expression to TPTP format (for prover queries)
- * Uses the modular TPTP converter
+ * Uses the sigma native converter
  */
 function convertToTPTP(kifExpr) {
-    const tokens = tptpTokenize(kifExpr);
-    const ast = tptpParse(tokens);
-
-    if (ast.length === 0) return '';
-
-    const tptp = convertFormula(ast[0], { ...tptpDefaultOptions, addPrefixes: true });
+    const tptp = tptpParseSUOKIFString(kifExpr, true);
     if (!tptp) return '';
-
-    return `fof(query, conjecture, ${tptp}).`;
+    return tptp;
 }
 
 /**
  * Convert a knowledge base to TPTP format (for prover queries)
- * Uses the modular TPTP converter
+ * Uses the sigma native converter
  */
 function convertKBToTPTP(kifText) {
-    const tokens = tptpTokenize(kifText);
-    const ast = tptpParse(tokens);
-
-    const result = convertKnowledgeBase(ast, {
-        ...tptpDefaultOptions,
-        addPrefixes: true,
-        includeSourceComments: false
-    });
+    const formulas = parseKIFFormulas(kifText);
+    const result = convertFormulas(formulas, 'kb', null, false);
 
     // Extract just the axiom lines (skip header/footer for prover use)
-    const lines = result.tptp.split('\n').filter(line =>
+    const lines = result.content.split('\n').filter(line =>
         line.startsWith('fof(') || line.startsWith('tff(')
     );
 

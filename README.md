@@ -1,93 +1,200 @@
-# SUO-KIF VSCode Language Support
+# SUO-KIF VSCode Extension
 
-A full-featured development environment for SUO-KIF (Standard Upper Ontology Knowledge Interchange Format) in Visual Studio Code. This extension provides comprehensive support for working with SUMO ontology files, including all features from the JEdit SUMO plugin and advanced theorem proving capabilities.
+A development environment for [SUO-KIF](suo-kif.pdf) and [TPTP](https://www.tptp.org/) in Visual Studio Code. Provides language support, code intelligence, SigmaKEE integration, and theorem proving for working with the [SUMO](https://www.ontologyportal.org/) ontology and related knowledge bases.
 
-For a formal specification of SUO-KIF, see ["Standard Upper Ontology - Knowledge Interchange Format" (Pease, 2009)](suo-kif.pdf).
+## Supported Languages
 
-## Features
+| Language | File Extensions | Description |
+|----------|----------------|-------------|
+| SUO-KIF  | `.kif` | Standard Upper Ontology Knowledge Interchange Format |
+| TPTP     | `.p`, `.tptp`, `.ax` | Thousands of Problems for Theorem Provers |
 
-### Syntax Highlighting & Code Intelligence
-*   **Syntax Highlighting:** Full support for logic operators, quantifiers, variables (`?var`, `@row`), and string literals.
-*   **Symbol Lookup:** Right-click > **"SUO-KIF: Search Symbol in Workspace"** to find usages.
-*   **Go to Definition:** (`F12`) Jump to defining relations like `instance`, `subclass`, `domain`.
-*   **Class Taxonomy:** Right-click > **"SUO-KIF: Show Class Taxonomy"** to visualize class hierarchies.
-*   **Type Hinting:** Hover over relations to see argument types inferred from `(domain ...)` rules.
-*   **Formatting:** (`Ctrl+Shift+F`) Reformat axioms with standard SUMO indentation.
+Both languages include syntax highlighting, bracket matching, and auto-closing pairs. TPTP files additionally support code folding for formula declarations and block comments (`/* */`).
 
-### TPTP Generation & Theorem Proving
-This extension integrates with **SigmaKEE** to convert SUO-KIF to TPTP, allowing you to run consistency checks and proof queries using provers like **Vampire** or **E-Prover**.
+## Commands
 
-*   **Generate TPTP:** Convert your workspace or specific files to TPTP format for analysis.
-*   **Run Prover:** Directly invoke a theorem prover on your ontology to check for logical consistency or prove theorems.
+All commands are available from the Command Palette (`Ctrl+Shift+P`). Commands marked with **(ctx)** also appear in the editor right-click context menu when editing `.kif` files.
 
-#### Modes of Operation
-1.  **Docker (Recommended):** Uses the official `adampease/sigmakee` Docker image. Requires Docker installed.
-2.  **Local Sigma:** Uses a local installation of SigmaKEE (requires Java).
-3.  **Context Aware:** Can integrate your current workspace with an **External Knowledge Base** (like the standard SUMO library) for full context validation.
+### Navigation & Search
 
-## Installation & Setup
+| Command | Keybinding | Description |
+|---------|------------|-------------|
+| **Search Symbol in Workspace** **(ctx)** | | Searches all `.kif` files in the workspace for occurrences of a symbol. Allows filtering by position in expression: predicate/head position, argument 1-4, or all positions. Opens a quick pick showing every match with surrounding context, and navigates to the selected occurrence. |
+| **Go to Definition** **(ctx)** | `F12` | Jumps to the definition of the symbol under the cursor. Searches for defining relations (`instance`, `subclass`, `subrelation`, `domain`, `domainSubclass`, `range`, `rangeSubclass`, `documentation`, `format`, `termFormat`). If multiple definitions exist, presents a quick pick to choose between them. |
+| **Show Class Taxonomy** **(ctx)** | | Opens an interactive webview panel showing the class hierarchy for a symbol. Displays superclasses (ancestors) and direct subclasses (children) as a navigable tree. Includes documentation for each node. Detects and reports cycles in the taxonomy graph. Nodes can be right-clicked to focus on that symbol or search for it in the workspace. |
+| **Browse Term in Sigma** **(ctx)** | `Ctrl+Shift+B` | Opens the selected symbol in the Sigma knowledge base browser (configurable URL, defaults to the public Sigma instance). Skips variables (`?` and `@` prefixed tokens). |
 
-1.  Install the extension from the VSCode Marketplace or VSIX.
-2.  **Theorem Prover:** Download [Vampire](https://vprover.github.io/) or [E-Prover](https://wwwlehre.dhbw-stuttgart.de/~sschulz/E/E.html) and set the path in settings (`suo-kif.proverPath`).
+### Editing
 
-### Configuring SigmaKEE (Required for TPTP/Proving)
+| Command | Keybinding | Description |
+|---------|------------|-------------|
+| **Format Axiom** **(ctx)** | `Ctrl+Shift+F` (when selection active) | Reformats the selected S-expression with standard SUMO indentation. If nothing is selected, finds and formats the enclosing expression. Logical operators place each argument on a new line; quantifiers keep variable lists inline; regular predicates keep arguments on the same line. Indent size is configurable. |
 
-To generate valid TPTP, the extension uses SigmaKEE. You can choose one of two methods:
+### Validation
 
-**Option A: Docker (Easiest)**
-1.  Install Docker Desktop.
-2.  In VSCode Settings, enable `suo-kif.useDocker`.
-3.  (Optional) Set `suo-kif.dockerImage` (default: `adampease/sigmakee`).
+| Command | Description |
+|---------|-------------|
+| **Check for Errors** **(ctx)** | Runs extended validation on the current file beyond the real-time diagnostics. Checks node structure, variable usage, arity against `domain` declarations, relation usage patterns, and empty relation lists. Results appear in the Problems panel. |
 
-**Option B: Local Installation**
-1.  Clone and build [SigmaKEE](https://github.com/ontologyportal/sigmakee).
-2.  In VSCode Settings, set `suo-kif.sigmaPath` to your SigmaKEE directory (the folder containing `build/` or `lib/`).
+### TPTP Generation
 
-## Usage
+| Command | Description |
+|---------|-------------|
+| **Generate TPTP File** **(ctx)** | Converts SUO-KIF to TPTP format. Offers multiple scope options: current file, selection only, entire workspace, full KB export from `config.xml`, or custom file selection. KB-level operations (workspace conversion, KB export) require working within a configured KB directory unless `enforceKBContext` is disabled. Opens the result in a new editor pane and reports the axiom count. Supports `fof`, `tff`, and `thf` output formats. |
 
-### 1. Generating TPTP
-Right-click in an editor and select **"SUO-KIF: Generate TPTP File"**.
-*   **Selection/File/Workspace:** Choose the scope of conversion.
-*   **Context:** Choose **"Standalone"** (just your files) or **"Integrate with External KB"** (e.g., merge your work with SUMO).
+### Theorem Proving
 
-### 2. Running the Theorem Prover
-Open the Command Palette (`Ctrl+Shift+P`) or Right-click and select **"SUO-KIF: Run Prover on..."**.
-*   **Scope:** Select **Selection**, **Current File**, or **Entire Workspace**.
-*   **Result:** The extension converts the content (plus any external KB context) to TPTP, runs the prover, and reports if the logical theory is **Satisfiable** (Consistent), **Unsatisfiable** (Contradiction), or if a **Theorem** was proved.
+| Command | Description |
+|---------|-------------|
+| **Query with Theorem Prover** **(ctx)** | Takes the currently selected KIF formula as a conjecture, converts it along with the workspace files as axioms into TPTP, and invokes the configured prover. Reports the result: Theorem (proved), CounterSatisfiable, Unsatisfiable, or Timeout. Only available when text is selected. |
+| **Run Prover on...** **(ctx)** | Runs the theorem prover with a selectable scope: selection/current line, current file, or entire workspace. Converts to TPTP using the configured Sigma runtime, invokes the prover, and displays the axiom count and SZS status result in a notification and output channel. |
 
-### 3. External Knowledge Base Integration
-When working on extensions to SUMO, you usually want to verify your files *in the context of SUMO*.
-1.  Download the SUMO .kif files (e.g., from the [SUMO repo](https://github.com/ontologyportal/sumo)).
-2.  When running Prover/TPTP commands, select **"Integrate with External KB"**.
-3.  Select the folder containing the SUMO .kif files. The extension will remember this path (`suo-kif.externalKBPath`).
+### Knowledge Base Management
 
-## Configuration Settings
+| Command | Description |
+|---------|-------------|
+| **Open Knowledge Base** | Reads the Sigma `config.xml` file, presents a quick pick of all configured KBs (showing name and constituent file count), and adds the selected KB's directory to the workspace as a folder. If `config.xml` is not found, offers to open settings. |
+| **Create Knowledge Base** | Creates a new KB entry in Sigma's `config.xml`. Prompts for a KB name, then opens a folder picker. Scans the selected folder for `.kif` files and registers them as constituents in `config.xml`. After creation, offers to open the new KB directory in the workspace. |
+
+## Language Providers
+
+These features work automatically in the background while editing `.kif` files.
+
+### Hover Information
+
+Hovering over a symbol displays:
+- **Documentation** extracted from `(documentation ...)` predicates in the workspace, filtered by the configured language (default: `EnglishLanguage`).
+- **Argument types** inferred from `(domain ...)` declarations, showing what types each argument position expects.
+
+### Autocomplete
+
+Typing in a `.kif` file triggers completions drawn from all symbols found across the workspace. Each suggestion includes documentation and argument type information from `domain` declarations.
+
+### Signature Help
+
+When typing inside an S-expression (triggered by space or `(`), a signature popup shows:
+- The relation or function name.
+- Argument types from `domain` declarations.
+- The currently active parameter is highlighted.
+- The signature expands dynamically as more arguments are entered.
+
+### Document Formatting
+
+Full-document formatting (`Shift+Alt+F`) and range formatting are supported. All top-level S-expressions are reformatted according to SUMO conventions.
+
+### Real-Time Diagnostics
+
+The extension validates `.kif` files on open, edit, and save, reporting problems in the Problems panel:
+
+- **Syntax errors** -- unclosed parentheses, invalid operands to logical operators, atoms in sentence positions.
+- **Naming conventions** -- classes and types passed to `subclass`/`instance` should start with uppercase; relations should start with lowercase.
+- **Arity checking** -- argument counts validated against `domain` declarations in the workspace.
+- **Variable tracking** -- identifies quantified vs. free variables.
+- **Relation usage** -- flags empty relation lists and validates minimum argument counts.
+
+### TPTP Document Symbols
+
+For `.tptp`/`.p`/`.ax` files, the extension provides an outline view and breadcrumbs. All formula declarations (`fof`, `tff`, `thf`, `cnf`, `tpi`) and `include` directives are extracted and categorized by role (axiom, conjecture, theorem, etc.).
+
+## Status Bar
+
+A status bar item on the right side shows the current KB context:
+
+| Display | Meaning |
+|---------|---------|
+| `KB: [name]` | Working within a configured knowledge base |
+| `KB: Outside` (warning) | A `config.xml` was found but the current workspace is outside any KB directory |
+| `KB: Unrestricted` | KB enforcement is disabled; all operations available |
+| *(hidden)* | No `config.xml` found |
+
+Clicking the status bar item triggers TPTP generation. The status updates automatically when workspace folders, the active editor, or relevant settings change.
+
+## Sigma Runtime Modes
+
+The extension uses SigmaKEE to convert SUO-KIF to TPTP. Three runtime modes are available, configured via `suo-kif.sigma.runtime`:
+
+### Native JS (`native (experimental)`)
+
+A pure JavaScript re-implementation of Sigma's conversion pipeline built into the extension. No external software required. Handles formula parsing, KB file reading, TPTP conversion, and predicate filtering. Supports `fof`, `tff`, and `thf` output.
+
+### Local (`local`)
+
+Uses a local SigmaKEE installation invoked via Java. Requires the `SIGMA_SRC` or `SIGMA_CP` environment variable, or the `suo-kif.sigma.srcPath` setting to point to the Sigma source directory.
+
+### Docker (`docker`)
+
+Uses a running Docker container with the Sigma image. Automatically locates a running container from the configured image (`apease/sigmakee` by default). Mounts the workspace for file access.
+
+## Configuration
+
+### General
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `suo-kif.proverPath` | (empty) | Path to Vampire or E-Prover executable (Required for proving). |
-| `suo-kif.proverType` | `vampire` | `vampire` or `eprover`. |
-| `suo-kif.proverTimeout` | `30` | Timeout in seconds. |
-| `suo-kif.useDocker` | `false` | Enable Docker mode for SigmaKEE. |
-| `suo-kif.dockerImage` | `adampease/sigmakee` | Docker image to use. |
-| `suo-kif.sigmaPath` | (empty) | Path to local SigmaKEE installation (if not using Docker). |
-| `suo-kif.externalKBPath`| (empty) | Path to external ontology files (e.g. SUMO) for integration. |
-| `suo-kif.useNativeJS` | `false` | **Experimental:** Use legacy JS converter (not recommended). |
-| `suo-kif.formatIndentSize`| `2` | Indentation size for formatting. |
+| `suo-kif.general.language` | `EnglishLanguage` | Language for documentation strings. |
+| `suo-kif.general.formatIndentSize` | `2` | Spaces per indentation level when formatting. |
+
+### Sigma
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `suo-kif.sigma.runtime` | `local` | Runtime mode: `local`, `docker`, or `native (experimental)`. |
+| `suo-kif.sigma.url` | `http://sigma.ontologyportal.org:8080/sigma/Browse.jsp` | URL of the Sigma KB browser for the Browse command. |
+| `suo-kif.sigma.knowledgeBase` | `SUMO` | Knowledge base name to use in the Sigma browser. |
+| `suo-kif.sigma.srcPath` | *(empty)* | Path to SigmaKEE source directory. Falls back to `$SIGMA_SRC`. |
+| `suo-kif.sigma.homePath` | *(empty)* | Path to SigmaKEE home directory. Falls back to `$SIGMA_HOME`. |
+| `suo-kif.sigma.dockerImage` | `apease/sigmakee` | Docker image for the Docker runtime. |
+| `suo-kif.sigma.externalKBPath` | *(empty)* | Path to an external KB directory (e.g. SUMO) for integration during TPTP generation. |
+| `suo-kif.sigma.configXmlPath` | *(empty)* | Explicit path to Sigma's `config.xml`. If unset, the extension searches `$SIGMA_HOME/KBs/`, `~/.sigmakee/KBs/`, `~/sigmakee/KBs/`, and other common locations. |
+| `suo-kif.sigma.enforceKBContext` | `true` | When enabled, KB-level operations require the workspace to be within a configured KB directory. Disable for unrestricted access. |
+
+### Theorem Prover
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `suo-kif.theoremProver.path` | *(empty)* | Path to the theorem prover executable. |
+| `suo-kif.theoremProver.type` | `vampire` | Prover type: `vampire` or `eprover`. |
+| `suo-kif.theoremProver.timeout` | `30` | Prover timeout in seconds. |
+| `suo-kif.theoremProver.tptpLang` | `fof` | TPTP output format: `fof` (first-order), `tff` (typed first-order), or `thf` (typed higher-order). |
 
 ## Requirements
 
-*   **VSCode** 1.70+
-*   **Java 21+** (If using Local Sigma mode)
-*   **Docker** (If using Docker mode)
-*   **Theorem Prover** (Vampire or E-Prover) for proof capabilities.
+- **VSCode** 1.70 or later
+- **Java** (for Local Sigma mode)
+- **Docker** (for Docker Sigma mode)
+- **Vampire** or **E-Prover** (for theorem proving commands)
+
+The Native JS runtime mode has no external dependencies.
+
+## Installation
+
+Install from the VSCode Marketplace or build from source:
+
+```
+git clone https://github.com/ontologyportal/vscode
+cd vscode
+npm install
+```
+
+Then press `F5` in VSCode to launch an Extension Development Host, or package as a `.vsix`:
+
+```
+npx vsce package
+```
 
 ## Resources
 
 - [SUMO (Suggested Upper Merged Ontology)](https://www.ontologyportal.org/)
 - [Sigma Knowledge Engineering Environment](https://github.com/ontologyportal/sigmakee)
 - [SUO-KIF Specification](suo-kif.pdf)
+- [TPTP Problem Library](https://www.tptp.org/)
+- [Vampire Theorem Prover](https://vprover.github.io/)
+- [E Theorem Prover](https://wwwlehre.dhbw-stuttgart.de/~sschulz/E/E.html)
+
+## License
+
+MIT
 
 ## Credits
 
-This extension is inspired by the [SUMOjEdit](https://github.com/ontologyportal/SUMOjEdit) plugin for jEdit and utilizes code from the [SigmaKEE](https://github.com/ontologyportal/sigmakee) project.
+This extension builds on the [SUMOjEdit](https://github.com/ontologyportal/SUMOjEdit) plugin for jEdit and incorporates conversion logic from the [SigmaKEE](https://github.com/ontologyportal/sigmakee) project.

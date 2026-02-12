@@ -1,6 +1,6 @@
 {
   "name": "suo-kif",
-  "displayName": "SUO-KIF Support",
+  "displayName": "SUO-KIF",
   "icon": "extension-icon.png",
   "description": "Full-featured SUO-KIF/SUMO and TPTP development environment for VSCode",
   "version": "2.0.0",
@@ -16,7 +16,10 @@
     "lint": "node --check extension.js && node --check src/**/*.js"
   },
   "devDependencies": {
-    "mocha": "^10.2.0"
+    "chai": "^4.5.0",
+    "mocha": "^10.2.0",
+    "proxyquire": "^2.1.3",
+    "sinon": "^15.0.0"
   },
   "engines": {
     "vscode": "^1.70.0"
@@ -68,6 +71,14 @@
       {
         "command": "suo-kif.generateTPTP",
         "title": "SUO-KIF: Generate TPTP File"
+      },
+      {
+        "command": "suo-kif.openKnowledgeBase",
+        "title": "SUO-KIF: Open Knowledge Base"
+      },
+      {
+        "command": "suo-kif.createKnowledgeBase",
+        "title": "SUO-KIF: Create Knowledge Base"
       }
     ],
     "keybindings": [
@@ -139,84 +150,113 @@
         }
       ]
     },
-    "configuration": {
-      "title": "SUO-KIF",
-      "properties": {
-        "suo-kif.language": {
-          "type": "string",
-          "default": "EnglishLanguage",
-          "description": "The language to use for documentation strings (e.g. EnglishLanguage)."
-        },
-        "suo-kif.sigmaUrl": {
-          "type": "string",
-          "default": "http://sigma.ontologyportal.org:8080/sigma/Browse.jsp",
-          "description": "URL of the Sigma KB browser."
-        },
-        "suo-kif.knowledgeBase": {
-          "type": "string",
-          "default": "SUMO",
-          "description": "Knowledge base to use in Sigma browser (e.g., SUMO)."
-        },
-        "suo-kif.proverPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to theorem prover executable (Vampire or E-Prover)."
-        },
-        "suo-kif.proverType": {
-          "type": "string",
-          "enum": ["vampire", "eprover"],
-          "default": "vampire",
-          "description": "Type of theorem prover to use."
-        },
-        "suo-kif.proverTimeout": {
-          "type": "number",
-          "default": 30,
-          "description": "Timeout in seconds for theorem prover queries."
-        },
-        "suo-kif.sigmaPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to SigmaKEE installation or source directory."
-        },
-        "suo-kif.sigmaRuntime": {
-          "type": "string",
-          "enum": ["local", "docker", "native (experimental)"],
-          "default": "local",
-          "description": "How to run Sigma. If set to local, use a local installation, if set to docker, use a running docker instance, if set to native, use the experimental JS implementation of Sigma (not recommended)"
-        },
-        "suo-kif.dockerImage": {
-          "type": "string",
-          "default": "adampease/sigmakee",
-          "description": "Docker image to use if suo-kif.sigmaRuntime is set to 'docker'."
-        },
-        "suo-kif.externalKBPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to an external knowledge base directory (e.g. SUMO) to integrate with."
-        },
-        "suo-kif.configXmlPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to Sigma's config.xml file. If not set, the extension will search common locations."
-        },
-        "suo-kif.tptpLang": {
-          "type": "string",
-          "enum": ["fof", "tff", "thf"],
-          "default": "fof",
-          "description": "TPTP output format: fof (first-order), tff (typed first-order), or thf (typed higher-order)."
-        },
-        "suo-kif.enforceKBContext": {
-          "type": "boolean",
-          "default": true,
-          "description": "When enabled, KB-level operations (workspace conversion, KB export) require working within a configured KB directory. Disable for advanced users who want unrestricted access."
-        },
-        "suo-kif.formatIndentSize": {
-          "type": "number",
-          "default": 2,
-          "description": "Number of spaces for each indentation level when formatting."
+    "configuration": [
+      {
+        "title": "General",
+        "properties": {
+          "suo-kif.general.language": {
+            "type": "string",
+            "default": "EnglishLanguage",
+            "description": "The language to use for documentation strings (e.g. EnglishLanguage)."
+          },
+          "suo-kif.general.formatIndentSize": {
+            "type": "number",
+            "default": 2,
+            "description": "Number of spaces for each indentation level when formatting."
+          }
+        }
+      },
+      {
+        "title": "Sigma",
+        "properties": {
+          "suo-kif.sigma.url": {
+            "type": "string",
+            "default": "http://sigma.ontologyportal.org:8080/sigma/Browse.jsp",
+            "description": "URL of the Sigma KB browser. Defaults to using the public version"
+          },
+          "suo-kif.sigma.knowledgeBase": {
+            "type": "string",
+            "default": "SUMO",
+            "description": "Knowledge base to use in Sigma browser (e.g., SUMO)."
+          },
+          "suo-kif.sigma.srcPath": {
+            "type": "string",
+            "default": "",
+            "description": "Path to SigmaKEE installation or source directory (if not specified, will try to use $SIGMA_SRC)"
+          },
+          "suo-kif.sigma.homePath": {
+            "type": "string",
+            "default": "",
+            "description": "Path to SigmaKEE home directory. If not specified, will use $SIGMA_HOME."
+          },
+          "suo-kif.sigma.runtime": {
+            "type": "string",
+            "enum": [
+              "local",
+              "docker",
+              "native (experimental)"
+            ],
+            "default": "local",
+            "description": "How to run Sigma. If set to local, use a local installation, if set to docker, use a running docker instance, if set to native, use the experimental JS implementation of Sigma (not recommended)"
+          },
+          "suo-kif.sigma.dockerImage": {
+            "type": "string",
+            "default": "apease/sigmakee",
+            "description": "Docker image to use if suo-kif.sigmaRuntime is set to 'docker'."
+          },
+          "suo-kif.sigma.externalKBPath": {
+            "type": "string",
+            "default": "",
+            "description": "Path to an external knowledge base directory (e.g. SUMO) to integrate with."
+          },
+          "suo-kif.sigma.configXmlPath": {
+            "type": "string",
+            "default": "",
+            "description": "Path to Sigma's config.xml file. If not set, the extension will search common locations."
+          },
+          "suo-kif.sigma.enforceKBContext": {
+            "type": "boolean",
+            "default": true,
+            "description": "When enabled, KB-level operations (workspace conversion, KB export) require working within a configured KB directory. Disable for advanced users who want unrestricted access."
+          }
+        }
+      },
+      {
+        "title": "Theorem Prover",
+        "description": "Settings relating to using a theorem prover within VSCode",
+        "properties": {
+          "suo-kif.theoremProver.path": {
+            "type": "string",
+            "default": "",
+            "description": "Path to theorem prover executable (Vampire or E-Prover)."
+          },
+          "suo-kif.theoremProver.type": {
+            "type": "string",
+            "enum": [
+              "vampire",
+              "eprover"
+            ],
+            "default": "vampire",
+            "description": "Type of theorem prover to use."
+          },
+          "suo-kif.theoremProver.timeout": {
+            "type": "number",
+            "default": 30,
+            "description": "Timeout in seconds for theorem prover queries."
+          },
+          "suo-kif.theoremProver.tptpLang": {
+            "type": "string",
+            "enum": [
+              "fof",
+              "tff",
+              "thf"
+            ],
+            "default": "fof",
+            "description": "TPTP output format: fof (first-order), tff (typed first-order), or thf (typed higher-order)."
+          }
         }
       }
-    },
+    ],
     "languages": [
       {
         "id": "suo-kif",
@@ -225,8 +265,8 @@
           "KIF"
         ],
         "icon": {
-            "light": "./kif-file-icon.png",
-            "dark": "./kif-file-icon.png"
+          "light": "./kif-file-icon.png",
+          "dark": "./kif-file-icon.png"
         },
         "extensions": [
           ".kif"
@@ -263,5 +303,8 @@
         "path": "./syntaxes/tptp.tmLanguage.json"
       }
     ]
+  },
+  "dependencies": {
+    "dockerode": "^4.0.9"
   }
 }
