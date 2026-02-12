@@ -261,10 +261,11 @@
     ],
     "languages": [
       {
-        "id": "sumo",
+        "id": "suo-kif",
         "aliases": [
-          "SUMO",
-          "KIF"
+          "SUO-KIF",
+          "KIF",
+          "SUMO"
         ],
         "icon": {
           "light": "./kif-file-icon.png",
