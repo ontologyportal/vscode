@@ -3,7 +3,7 @@
   "displayName": "SUMO",
   "icon": "extension-icon.png",
   "description": "Full-featured SUMO/SUMO and TPTP development environment for VSCode",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "publisher": "ontologyportal",
   "repository": {
     "type": "git",
