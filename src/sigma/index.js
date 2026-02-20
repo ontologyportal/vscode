@@ -1,12 +1,9 @@
 /**
  * Sigmakee interface code for extension
  */
-const vscode = require('vscode');
-const fs = require('fs');
-const path = require('path');
 
 const { getSigmaHome, getSigmaPath, getSigmaRuntime } = require('./engine');
-const { runSigma } = require('./runner');
+const { compileKB, compileFormulas  } = require('./compile');
 const { findConfigXml, isWithinConfiguredKB, getKBConstituentsFromConfig } = require('./config');
 
 module.exports = {
@@ -15,6 +12,7 @@ module.exports = {
     findConfigXml,
     isWithinConfiguredKB,
     getKBConstituentsFromConfig,
-    runSigma,
+    compileKB,
+    compileFormulas,
     getSigmaRuntime
 };

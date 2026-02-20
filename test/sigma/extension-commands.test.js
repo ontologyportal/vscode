@@ -126,7 +126,8 @@ function buildVscodeMock() {
                 tooltip: '',
                 backgroundColor: undefined
             }),
-            onDidChangeActiveTextEditor: sinon.stub().returns({ dispose: sinon.stub() })
+            onDidChangeActiveTextEditor: sinon.stub().returns({ dispose: sinon.stub() }),
+            registerTreeDataProvider: sinon.stub().returns({ dispose: sinon.stub() })
         },
         workspace: {
             getConfiguration: sinon.stub().returns(configObj),
@@ -250,11 +251,22 @@ function buildSigmaMocks() {
  * Returns the module and the mocks object for assertions.
  */
 function loadExtension(vscodeMock, sigmaMocks) {
+    // Minimal KBTreeProvider stub that satisfies extension.js without requiring vscode
+    const kbTreeStub = {
+        KBTreeProvider: class {
+            constructor() { this.kbs = []; }
+            refresh(kbs) { this.kbs = kbs || []; }
+            getTreeItem(el) { return el; }
+            getChildren() { return []; }
+        }
+    };
+
     const ext = proxyquire('../../extension', {
         'vscode': vscodeMock,
         './src/sigma/index': sigmaMocks.sigmaIndex,
         './src/sigma/config': sigmaMocks.sigmaConfig,
         './src/sigma/engine/native/index.js': sigmaMocks.nativeEngine,
+        './src/sigma/kb-tree': kbTreeStub,
         './src/const': require('../../src/const')
     });
     return ext;
@@ -287,7 +299,7 @@ describe('Extension Commands (extension.js)', function () {
     // activate()
     // -----------------------------------------------------------------------
     describe('activate()', () => {
-        it('should register all 11 commands', () => {
+        it('should register all 14 commands', () => {
             ext.activate(context);
 
             const names = v.commands.registerCommand.args.map(a => a[0]);
@@ -302,6 +314,9 @@ describe('Extension Commands (extension.js)', function () {
             assert(names.includes('sumo.generateTPTP'));
             assert(names.includes('sumo.openKnowledgeBase'));
             assert(names.includes('sumo.createKnowledgeBase'));
+            assert(names.includes('sumo.kbExplorer.refresh'));
+            assert(names.includes('sumo.kbExplorer.addFile'));
+            assert(names.includes('sumo.kbExplorer.removeFile'));
         });
 
         it('should push disposables into context.subscriptions', () => {
@@ -373,72 +388,58 @@ describe('Extension Commands (extension.js)', function () {
             assert(v.window.showWarningMessage.firstCall.args[0].includes('No knowledge bases'));
         });
 
-        it('should show quick pick of available KBs', async () => {
+        it('should load all KBs and show info message without prompting', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns('/mock/KBs/config.xml');
             sigma.sigmaConfig.parseConfigXmlSync.returns({
                 preferences: { kbDir: '/mock/KBs' },
                 knowledgeBases: {
-                    SUMO: { constituents: ['Merge.kif', 'Mid.kif'] },
-                    TestKB: { constituents: ['test.kif'] }
+                    SUMO: { constituents: ['/mock/KBs/Merge.kif', '/mock/KBs/Mid.kif'] },
+                    TestKB: { constituents: ['/mock/KBs/test.kif'] }
                 }
             });
-            v.window.showQuickPick.resolves({ label: 'SUMO' });
             const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
-            assert(v.window.showQuickPick.calledOnce);
-            const items = v.window.showQuickPick.firstCall.args[0];
-            assert.strictEqual(items.length, 2);
-            assert.strictEqual(items[0].label, 'SUMO');
-            assert.strictEqual(items[0].description, '2 constituent files');
-            assert.strictEqual(items[1].label, 'TestKB');
+            // Should NOT show a quick pick
+            assert(v.window.showQuickPick.notCalled, 'showQuickPick should not be called');
+            // Should focus the KB Explorer panel
+            assert(v.commands.executeCommand.calledWith('sumo.kbExplorer.focus'));
+            // Should show summary message mentioning both KBs
+            assert(v.window.showInformationMessage.calledOnce);
+            const msg = v.window.showInformationMessage.firstCall.args[0];
+            assert(msg.includes('SUMO'), 'Message should mention SUMO');
+            assert(msg.includes('TestKB'), 'Message should mention TestKB');
         });
 
-        it('should open folder in new window on selection', async () => {
+        it('should show summary with correct KB and file counts', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns('/mock/KBs/config.xml');
             sigma.sigmaConfig.parseConfigXmlSync.returns({
                 preferences: { kbDir: '/mock/KBs' },
-                knowledgeBases: { SUMO: { constituents: ['Merge.kif'] } }
+                knowledgeBases: { SUMO: { constituents: ['/mock/KBs/Merge.kif'] } }
             });
-            v.window.showQuickPick.resolves({ label: 'SUMO' });
             const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
-            assert(v.commands.executeCommand.calledWith('vscode.openFolder'));
-            const args = v.commands.executeCommand.args.find(a => a[0] === 'vscode.openFolder');
-            assert.strictEqual(args[1].fsPath, '/mock/KBs');
-            assert.strictEqual(args[2], true); // newWindow = true
+            assert(v.window.showInformationMessage.calledOnce);
+            const msg = v.window.showInformationMessage.firstCall.args[0];
+            assert(msg.includes('1 knowledge base') || msg.includes('Opened 1'), 'Message should report 1 KB');
         });
 
-        it('should use dirname of config.xml when kbDir not in preferences', async () => {
+        it('should use dirname of config.xml as kbDir when kbDir not in preferences', async () => {
             sigma.sigmaConfig.findLocalConfigXml.returns('/some/path/config.xml');
             sigma.sigmaConfig.parseConfigXmlSync.returns({
                 preferences: {},
-                knowledgeBases: { MyKB: { constituents: ['a.kif'] } }
+                knowledgeBases: { MyKB: { constituents: ['/some/path/a.kif'] } }
             });
-            v.window.showQuickPick.resolves({ label: 'MyKB' });
             const handler = getCommand('sumo.openKnowledgeBase');
 
             await handler();
 
-            const args = v.commands.executeCommand.args.find(a => a[0] === 'vscode.openFolder');
-            assert.strictEqual(args[1].fsPath, '/some/path');
-        });
-
-        it('should do nothing when user cancels quick pick', async () => {
-            sigma.sigmaConfig.findLocalConfigXml.returns('/mock/config.xml');
-            sigma.sigmaConfig.parseConfigXmlSync.returns({
-                preferences: {},
-                knowledgeBases: { SUMO: { constituents: ['a.kif'] } }
-            });
-            v.window.showQuickPick.resolves(undefined);
-            const handler = getCommand('sumo.openKnowledgeBase');
-
-            await handler();
-
-            assert(v.commands.executeCommand.neverCalledWith('vscode.openFolder'));
+            // Should focus explorer and show message — kbDir defaults to dirname('/some/path/config.xml')
+            assert(v.commands.executeCommand.calledWith('sumo.kbExplorer.focus'));
+            assert(v.window.showInformationMessage.calledOnce);
         });
     });
 
@@ -749,13 +750,14 @@ describe('Extension Commands (extension.js)', function () {
                 document: doc,
                 selection: makeRange(0, 0, 0, 23)
             };
-            configStore['proverPath'] = undefined;
+            configStore['theoremProver.path'] = undefined;
             const handler = getCommand('sumo.queryProver');
 
             await handler();
 
             assert(v.window.showErrorMessage.calledOnce);
-            assert(v.window.showErrorMessage.firstCall.args[0].includes('prover path'));
+            assert(v.window.showErrorMessage.firstCall.args[0].includes('prover path') ||
+                   v.window.showErrorMessage.firstCall.args[0].includes('Theorem prover path'));
         });
 
         it('should show error when prover executable not found', async () => {
@@ -764,7 +766,7 @@ describe('Extension Commands (extension.js)', function () {
                 document: doc,
                 selection: makeRange(0, 0, 0, 23)
             };
-            configStore['proverPath'] = '/nonexistent/prover';
+            configStore['theoremProver.path'] = '/nonexistent/prover';
             const handler = getCommand('sumo.queryProver');
 
             await handler();
@@ -790,19 +792,20 @@ describe('Extension Commands (extension.js)', function () {
         it('should show error when prover path not configured', async () => {
             const doc = makeDocument('(instance Human Animal)');
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
-            configStore['proverPath'] = undefined;
+            configStore['theoremProver.path'] = undefined;
             const handler = getCommand('sumo.runProverOnScope');
 
             await handler();
 
             assert(v.window.showErrorMessage.calledOnce);
-            assert(v.window.showErrorMessage.firstCall.args[0].includes('prover path'));
+            assert(v.window.showErrorMessage.firstCall.args[0].includes('prover path') ||
+                   v.window.showErrorMessage.firstCall.args[0].includes('Theorem prover path'));
         });
 
         it('should show error when prover not found on disk', async () => {
             const doc = makeDocument('(instance Human Animal)');
             v.window.activeTextEditor = { document: doc, selection: makeRange(0, 0, 0, 0) };
-            configStore['proverPath'] = '/does/not/exist';
+            configStore['theoremProver.path'] = '/does/not/exist';
             const handler = getCommand('sumo.runProverOnScope');
 
             await handler();

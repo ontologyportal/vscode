@@ -71,7 +71,7 @@
         },
         {
           "name": "keyword.operator.comparison.suo-kif",
-          "match": "="
+          "match": "(equal)"
         }
       ]
     },

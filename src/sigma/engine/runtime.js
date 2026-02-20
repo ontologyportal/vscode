@@ -1,13 +1,17 @@
 const vscode = require('vscode');
 
 const fs = require('fs');
+const path = require('path');
 const Docker = require('dockerode');
+
+const { LocalRuntimeRunner } = require("./local");
 
 let runtimeInstance = null;
 let lastRuntimeType = null;
 
 /**
  * Helper to get the currently selected runtime for sigma
+ * @returns {SigmaRuntime} The current runtime object
  */
 function getSigmaRuntime() {
     // Check config from vscode
@@ -45,9 +49,26 @@ class SigmaRuntime {
     get useNativeJS() { return false; }
 
     /**
+     * Initialize the runtime
+     * @param {vscode.ExtensionContext} context
+     * @return {Promise<void>}
+     */
+    async initialize(context) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
+     * Shutdown the runtime
+     * @return {Promise<void>}
+     */
+    async shutdown() {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
      * Get the config.xml options of the current runtime
      * @param { string } envVar The name of the environment variable
-     * @returns { string | null } The value of the environment variable
+     * @returns { Promise<string | null> } The value of the environment variable
      */
     async getEnvironmentVar(envVar) {
         throw new Error("Cannot invoke abstract interface functions");
@@ -56,7 +77,7 @@ class SigmaRuntime {
     /**
      * Check whether a file exists at a path
      * @param { string } path The path of the file to read
-     * @returns { bool } True if the file exists, false if not
+     * @returns { Promise<bool> } True if the file exists, false if not
      */
     async existsAtPath(path) {
         throw new Error("Cannot invoke abstract interface functions");
@@ -65,15 +86,67 @@ class SigmaRuntime {
     /**
      * Get file contents
      * @param { string } path The path of the file to read
-     * @returns { string | null } Contents of the file, null if cannot be read
+     * @returns { Promise<string | null> } Contents of the file, null if cannot be read
      */
     async readFile(path) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
+     * Get the name of the current runtime
+     * @returns { string }
+     */
+    getName() {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
+     * Convert a knowledge base to an output language
+     * @param { vscode.ExtensionContext } context The vscode extension context
+     * @param { string } kbName The name of the KB to convert
+     * @returns { string }
+     */
+    async compileKB(context, kbName) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
+     * Convert a set of formulas to a specific output language
+     * @param { vscode.ExtensionContext } context The vscode extension context
+     * @param { string[] } formulas The name of the KB to convert
+     * @returns { string }
+     */
+    async compileFormulas(context, formulas) {
         throw new Error("Cannot invoke abstract interface functions");
     }
 }
 
 class LocalRuntime extends SigmaRuntime {
+    constructor() {
+        super();
+        this.runner = new LocalRuntimeRunner();
+    }
+
     get useLocal() { return true; }
+
+    /**
+     * Initialize the runtime
+     * @param {vscode.ExtensionContext} context
+     * @return {Promise<void>}
+     */
+    async initialize(context) {
+        if (this.runner.initialized) return;
+        await this.runner.initialize(context);
+    }
+
+    /**
+     * Shutdown the runtime
+     * @return {Promise<void>}
+     */
+    async shutdown() {
+        if (!this.runner.initialized) return;
+        await this.runner.stop();
+    }
 
     async getEnvironmentVar(envVar) {
         return process.env[envVar] || null;
@@ -93,6 +166,26 @@ class LocalRuntime extends SigmaRuntime {
             return await fs.promises.readFile(path, 'utf8');
         }
         return null;
+    }
+
+    getName() {
+        return "Local Sigma"
+    }
+
+    /**
+     * Convert a knowledge base to an output language
+     * @param { vscode.ExtensionContext } context The vscode extension context
+     * @param { string } kbName The name of the KB to convert
+     * @returns { string }
+     */
+    async compileKB(context, kbName) {
+        const tempDir = context.storageUri;
+        const tempFile = path.join(tempDir, `${kbName}-${this.getName}.tptp`);
+        writeFile(tempFile, kbName);
+    }
+
+    async compileFormulas(context, formulas) {
+        throw new Error("Compiling formulas is currently not implemented for native sigma")
     }
 }
 
@@ -173,6 +266,18 @@ class DockerRuntime extends SigmaRuntime {
         const res = await this._execCmd(['cat', path]);
         return (res && res.exitCode === 0) ? res.output : null;
     }
+
+    getName() {
+        return "Dockerized Sigma"
+    }
+
+    async compileKB(context, kbName) {
+        throw new Error("Generating KBs is currently not implemented for dockerized sigma")
+    }
+
+    async compileFormulas(context, formulas) {
+        throw new Error("Compiling formulas is currently not implemented for dockerized sigma")
+    }
 }
 
 class NativeRuntime extends SigmaRuntime {
@@ -186,6 +291,18 @@ class NativeRuntime extends SigmaRuntime {
     }
     async readFile(path) {
         throw new Error("Cannot utilize this function with a native runtime");
+    }
+
+    getName() {
+        return "Javascript implemented Sigma"
+    }
+
+    async compileKB(context, kbName) {
+        throw new Error("Generating KBs is currently not implemented for the native JS implementation")
+    }
+
+    async compileFormulas(context, formulas) {
+        throw new Error("Compiling formulas is currently not implemented for the native JS implementation")
     }
 }
 

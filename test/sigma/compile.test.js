@@ -69,6 +69,7 @@ describe('Sigma Compilation (src/sigma/compile.js)', () => {
             'child_process': childProcessMock,
             './engine': engineMock,
             './index': indexMock,
+            './config': indexMock,
             'fs': fsMock
         });
     });
@@ -83,11 +84,20 @@ describe('Sigma Compilation (src/sigma/compile.js)', () => {
         it('should use Local runtime', async () => {
             indexMock.isWithinConfiguredKB.returns({ kbName: 'SUMO' });
             runtimeMock.useLocal = true;
-            
+            fsMock.readFileSync.returns('fof(kb_SUMO_1, axiom, s__instance(s__Foo, s__Bar)).');
+
             const procMock = new EventEmitter();
             procMock.stdout = new EventEmitter();
             procMock.stderr = new EventEmitter();
-            childProcessMock.spawn.returns(procMock);
+
+            childProcessMock.spawn.callsFake(() => {
+                // Emit stdout and close asynchronously so the listener is attached first
+                setImmediate(() => {
+                    procMock.stdout.emit('data', Buffer.from('File written: /tmp/output.fof\n'));
+                    procMock.emit('close', 0);
+                });
+                return procMock;
+            });
 
             await compileModule.compileKB();
 

@@ -31,8 +31,10 @@ describe('Sigma Runner (src/sigma/runner.js)', () => {
 
         // Load module with mocks
         runnerModule = proxyquire('../../src/sigma/runner', {
+            'vscode': { window: {}, workspace: {}, commands: {} },
             './engine': engineMock,
-            './engine/native/index.js': nativeMock
+            './engine/native/index.js': nativeMock,
+            './compile.js': { compileKB: sinon.stub() }
         });
     });
 

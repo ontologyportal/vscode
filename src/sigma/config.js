@@ -3,8 +3,7 @@
  * and utilization
  */
 
-const { getSigmaHome, getSigmaPath, getSigmaRuntime } = require('./engine');
-const { execSync } = require('child_process');
+const { getSigmaPath, getSigmaRuntime } = require('./engine');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -14,7 +13,7 @@ const vscode = require('vscode');
 /**
  * Parse Sigma's config.xml file and extract knowledge base definitions
  * @param {string} configPath - Path to config.xml
- * @returns {Object} Parsed configuration with preferences and KBs
+ * @returns {Promise<{preferences: Object, knowledgeBases: Object}>} Parsed configuration with preferences and KBs
  */
 async function parseConfigXml(configPath) {
     const runtime = getSigmaRuntime();
@@ -52,15 +51,17 @@ async function parseConfigXml(configPath) {
         };
     }
 
+    console.log(result);
+
     return result;
 }
 
 /**
  * Find config.xml for Sigma installation
  * Searches in common locations
- * @returns {string|null} Path to config.xml or null
+ * @returns {Promise<string|null>} Path to config.xml or null
  */
-async function findConfigXml(runtime) {
+async function findConfigXml() {
     const activeRuntime = getSigmaRuntime();
     const config = vscode.workspace.getConfiguration('sumo');
 
@@ -133,125 +134,16 @@ async function findConfigXml(runtime) {
 }
 
 /**
- * Find config.xml on the local filesystem only (synchronous).
- * Unlike findConfigXml(), this works regardless of runtime setting.
- * @returns {string|null} Path to config.xml or null
- */
-function findLocalConfigXml() {
-    const config = vscode.workspace.getConfiguration('sumo');
-
-    // 1. Check explicit setting
-    const configPath = config.get('sigma.configXmlPath');
-    if (configPath && fs.existsSync(configPath)) {
-        return configPath;
-    }
-
-    // 2. Check $SIGMA_HOME/KBs/config.xml
-    const sigmaHome = process.env.SIGMA_HOME;
-    if (sigmaHome) {
-        const p = path.join(sigmaHome, 'KBs', 'config.xml');
-        if (fs.existsSync(p)) return p;
-    }
-
-    // 3. Check common home directory locations
-    const homeDir = os.homedir();
-    const homePaths = [
-        path.join(homeDir, '.sigmakee', 'KBs', 'config.xml'),
-        path.join(homeDir, 'sigmakee', 'KBs', 'config.xml')
-    ];
-    for (const p of homePaths) {
-        if (fs.existsSync(p)) return p;
-    }
-
-    return null;
-}
-
-/**
- * Parse config.xml synchronously from local filesystem.
- * Same regex parsing as parseConfigXml but uses fs.readFileSync.
- * @param {string} configPath - Path to config.xml
- * @returns {Object|null} Parsed configuration with preferences and KBs
- */
-function parseConfigXmlSync(configPath) {
-    let content;
-    try {
-        content = fs.readFileSync(configPath, 'utf-8');
-    } catch (e) {
-        return null;
-    }
-
-    if (!content) return null;
-
-    const result = {
-        preferences: {},
-        knowledgeBases: {}
-    };
-
-    // Parse preferences - <preference name="key" value="val" />
-    const prefRegex = /<preference\s+name\s*=\s*"([^"]+)"\s+value\s*=\s*"([^"]*)"\s*\/?\s*>/g;
-    let match;
-    while ((match = prefRegex.exec(content)) !== null) {
-        result.preferences[match[1]] = match[2];
-    }
-
-    // Parse knowledge bases - <kb name="SUMO">...</kb>
-    const kbRegex = /<kb\s+name\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)<\/kb>/g;
-    while ((match = kbRegex.exec(content)) !== null) {
-        const kbName = match[1];
-        const kbContent = match[2];
-
-        const constituents = [];
-        const constRegex = /<constituent\s+filename\s*=\s*"([^"]+)"\s*\/?\s*>/g;
-        let constMatch;
-        while ((constMatch = constRegex.exec(kbContent)) !== null) {
-            constituents.push(constMatch[1]);
-        }
-
-        result.knowledgeBases[kbName] = {
-            constituents: constituents
-        };
-    }
-
-    return result;
-}
-
-/**
- * Add a new KB entry to config.xml
- * @param {string} configPath - Path to config.xml
- * @param {string} kbName - Name of the new knowledge base
- * @param {string[]} constituentFilenames - Array of constituent file paths
- */
-function addKBToConfig(configPath, kbName, constituentFilenames) {
-    const content = fs.readFileSync(configPath, 'utf-8');
-
-    const constituentsXml = constituentFilenames
-        .map(f => `    <constituent filename="${f}" />`)
-        .join('\n');
-
-    const kbEntry = `  <kb name="${kbName}">\n${constituentsXml}\n  </kb>\n`;
-
-    // Insert before closing </configuration> tag
-    const closingTag = '</configuration>';
-    const idx = content.lastIndexOf(closingTag);
-    if (idx === -1) {
-        throw new Error('Invalid config.xml: missing </configuration> tag');
-    }
-
-    const newContent = content.slice(0, idx) + kbEntry + closingTag + content.slice(idx + closingTag.length);
-    fs.writeFileSync(configPath, newContent, 'utf-8');
-}
-
-/**
  * Check if the current workspace or file is within a configured KB directory
- * @returns {Object|null} KB info if within a KB, null otherwise
+ * @returns {Promise<Object|null>} KB info if within a KB, null otherwise
  */
-function isWithinConfiguredKB() {
-    const configPath = findLocalConfigXml();
+async function isWithinConfiguredKB() {
+    const configPath = await findConfigXml();
     if (!configPath) {
         return null;
     }
 
-    const parsed = parseConfigXmlSync(configPath);
+    const parsed = await parseConfigXml(configPath);
     if (!parsed) {
         return null;
     }
@@ -339,12 +231,12 @@ function isWithinConfiguredKB() {
  * @returns {Array<string>|null} Array of constituent file paths or null
  */
 async function getKBConstituentsFromConfig(kbName = null) {
-    const configPath = findLocalConfigXml();
+    const configPath = await findConfigXml();
     if (!configPath) {
         return null;
     }
 
-    const parsed = parseConfigXmlSync(configPath);
+    const parsed = await parseConfigXml(configPath);
     if (!parsed) {
         return null;
     }
@@ -402,12 +294,60 @@ async function getKBConstituentsFromConfig(kbName = null) {
     };
 }
 
+/**
+ * Add a constituent file to an existing KB entry in config.xml.
+ * @param {string} configPath - Path to config.xml
+ * @param {string} kbName - Name of the knowledge base to modify
+ * @param {string} filename - Filename attribute value to add
+ */
+function addFileToConfig(configPath, kbName, filename) {
+    const content = fs.readFileSync(configPath, 'utf-8');
+
+    const escapedName = kbName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const kbStart = content.search(new RegExp(`<kb\\s+name\\s*=\\s*"${escapedName}"`));
+    if (kbStart === -1) {
+        throw new Error(`Knowledge base "${kbName}" not found in config.xml`);
+    }
+
+    const closeTag = '</kb>';
+    const kbClose = content.indexOf(closeTag, kbStart);
+    if (kbClose === -1) {
+        throw new Error(`Malformed config.xml: no closing </kb> for "${kbName}"`);
+    }
+
+    const newLine = `    <constituent filename="${filename}" />\n  `;
+    const newContent = content.slice(0, kbClose) + newLine + content.slice(kbClose);
+    fs.writeFileSync(configPath, newContent, 'utf-8');
+}
+
+/**
+ * Remove a constituent file from a KB entry in config.xml.
+ * @param {string} configPath - Path to config.xml
+ * @param {string} kbName - Name of the knowledge base (used for error messages)
+ * @param {string} filename - The exact filename attribute value to remove
+ */
+function removeFileFromConfig(configPath, kbName, filename) {
+    const content = fs.readFileSync(configPath, 'utf-8');
+
+    const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const constituentRegex = new RegExp(
+        `[ \\t]*<constituent\\s+filename\\s*=\\s*"${escapedFilename}"\\s*\\/?>[ \\t]*\\n?`,
+        'g'
+    );
+
+    const newContent = content.replace(constituentRegex, '');
+    if (newContent === content) {
+        throw new Error(`Constituent "${filename}" not found in KB "${kbName}" in config.xml`);
+    }
+
+    fs.writeFileSync(configPath, newContent, 'utf-8');
+}
+
 module.exports = {
     findConfigXml,
     parseConfigXml,
-    findLocalConfigXml,
-    parseConfigXmlSync,
-    addKBToConfig,
+    addFileToConfig,
+    removeFileFromConfig,
     isWithinConfiguredKB,
     getKBConstituentsFromConfig
 }

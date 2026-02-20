@@ -1,3 +1,4 @@
 .claude/
 *.vsix
 node_modules
+dist/

@@ -1,7 +1,7 @@
 {
   "name": "sumo",
   "displayName": "SUMO",
-  "icon": "extension-icon.png",
+  "icon": "./res/icon/extension-icon.png",
   "description": "Full-featured SUMO/SUMO and TPTP development environment for VSCode",
   "version": "3.0.0",
   "publisher": "ontologyportal",
@@ -14,14 +14,16 @@
     "test": "mocha test/**/*.test.js",
     "test:watch": "mocha --watch test/**/*.test.js",
     "lint": "node --check extension.js && node --check src/**/*.js",
-    "build": "vsce package"
+    "build": "vsce package -o ./dist",
+    "publish": "vsce publish"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.0",
+    "@vscode/vsce": "^3.7.1",
     "chai": "^4.5.0",
-    "mocha": "^10.2.0",
+    "mocha": "^5.0.5",
     "proxyquire": "^2.1.3",
-    "sinon": "^15.0.0",
-    "@vscode/vsce": "^3.7.1"
+    "sinon": "^15.0.0"
   },
   "engines": {
     "vscode": "^1.70.0"
@@ -81,6 +83,21 @@
       {
         "command": "sumo.createKnowledgeBase",
         "title": "SUMO: Create Knowledge Base"
+      },
+      {
+        "command": "sumo.kbExplorer.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sumo.kbExplorer.addFile",
+        "title": "Add File to KB",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sumo.kbExplorer.removeFile",
+        "title": "Remove File from KB",
+        "icon": "$(remove)"
       }
     ],
     "keybindings": [
@@ -103,7 +120,60 @@
         "when": "editorLangId == sumo"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "sumo.kbExplorer",
+          "name": "Knowledge Bases"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "sumo.kbExplorer",
+        "contents": "No knowledge bases loaded.\n[Open Knowledge Bases](command:sumo.openKnowledgeBase)"
+      }
+    ],
     "menus": {
+      "view/title": [
+        {
+          "command": "sumo.kbExplorer.refresh",
+          "when": "view == sumo.kbExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "sumo.openKnowledgeBase",
+          "when": "view == sumo.kbExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "sumo.createKnowledgeBase",
+          "when": "view == sumo.kbExplorer",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sumo.kbExplorer.addFile",
+          "when": "view == sumo.kbExplorer && viewItem == kb",
+          "group": "inline"
+        },
+        {
+          "command": "sumo.kbExplorer.removeFile",
+          "when": "view == sumo.kbExplorer && viewItem == kbFile",
+          "group": "inline"
+        },
+        {
+          "command": "sumo.kbExplorer.addFile",
+          "when": "view == sumo.kbExplorer && viewItem == kb",
+          "group": "modify@1"
+        },
+        {
+          "command": "sumo.kbExplorer.removeFile",
+          "when": "view == sumo.kbExplorer && viewItem == kbFile",
+          "group": "modify@1"
+        }
+      ],
       "editor/context": [
         {
           "command": "sumo.searchSymbol",
@@ -268,13 +338,13 @@
           "SUMO"
         ],
         "icon": {
-          "light": "./kif-file-icon.png",
-          "dark": "./kif-file-icon.png"
+          "light": "./res/icon/kif-file-icon.png",
+          "dark": "./res/icon/kif-file-icon.png"
         },
         "extensions": [
           ".kif"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./res/lang/suo-kif-language-configuration.json"
       },
       {
         "id": "tptp",
@@ -283,31 +353,32 @@
           "TPTP Problem"
         ],
         "icon": {
-          "light": "./tptp-file-icon.png",
-          "dark": "./tptp-file-icon.png"
+          "light": "./res/icon/tptp-file-icon.png",
+          "dark": "./res/icon/tptp-file-icon.png"
         },
         "extensions": [
           ".p",
           ".tptp",
           ".ax"
         ],
-        "configuration": "./tptp-language-configuration.json"
+        "configuration": "./res/lang/tptp-language-configuration.json"
       }
     ],
     "grammars": [
       {
         "language": "suo-kif",
         "scopeName": "source.suo-kif",
-        "path": "./syntaxes/suo-kif.tmLanguage.json"
+        "path": "./res/syntaxes/suo-kif.tmLanguage.json"
       },
       {
         "language": "tptp",
         "scopeName": "source.tptp",
-        "path": "./syntaxes/tptp.tmLanguage.json"
+        "path": "./res/syntaxes/tptp.tmLanguage.json"
       }
     ]
   },
   "dependencies": {
-    "dockerode": "^4.0.9"
+    "dockerode": "^4.0.9",
+    "js4j": "^0.1.2"
   }
 }
