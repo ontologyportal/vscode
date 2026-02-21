@@ -5,9 +5,51 @@ const { findConfigXml, parseConfigXml } = require('./sigma/config');
 const fs = require('fs');
 const path = require('path');
 
+/** @type {{[kb: string]: { [sym: string]: {file, line, type, context}[]}}} */
 let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
 
-async function getKBFiles() {
+/** @type {string} */
+let currentKB = null;
+
+/**
+ * Set the current KB being browsed
+ * @param {string} kb The name of the KB
+ */
+function setKB(kb) {
+    currentKB = kb;
+}
+
+/**
+ * Get the current KB being browsed
+ * @returns {string|null} The name of the current KB
+ */
+function getKB() {
+    return currentKB;
+}
+
+/**
+ * Get all knowledge bases in the current context
+ * @returns {Promise<string[]>}
+ */
+async function getKBs() {
+    const configPath = await findConfigXml();
+    if (configPath) {
+        const parsed = await parseConfigXml(configPath);
+        if (parsed) {
+            return Object.keys(parsed.knowledgeBases).flat();
+        }
+    }
+    return [];
+}
+
+/**
+ * Get all the files for a KB
+ * @param {undefined | string} kbName Whether to fetch a specific KB's files
+ * @returns {Promise<vscode.Uri[]>}
+ */
+async function getKBFiles(kbName = undefined) {
+    if (!kbName) kbName = currentKB;
+    if (!kbName) return [];
     const configPath = await findConfigXml();
     if (configPath) {
         const parsed = await parseConfigXml(configPath);
@@ -15,19 +57,21 @@ async function getKBFiles() {
             const kbDir = parsed.preferences.kbDir || path.dirname(configPath);
             const seen = new Set();
             const uris = [];
-            for (const kb of Object.values(parsed.knowledgeBases)) {
-                for (const c of kb.constituents) {
-                    const abs = path.isAbsolute(c) ? c : path.join(kbDir, c);
-                    if (!seen.has(abs) && fs.existsSync(abs)) {
-                        seen.add(abs);
-                        uris.push(vscode.Uri.file(abs));
-                    }
+            if (!(kbName in parsed.knowledgeBases)) {
+                throw new Error("Could not find kb");
+            }
+            const kb = parsed.knowledgeBases[kbName];
+            for (const c of kb.constituents) {
+                const abs = path.isAbsolute(c) ? c : path.join(kbDir, c);
+                if (!seen.has(abs) && fs.existsSync(abs)) {
+                    seen.add(abs);
+                    uris.push(vscode.Uri.file(abs));
                 }
             }
             if (uris.length > 0) return uris;
         }
     }
-    return vscode.workspace.findFiles('**/*.kif');
+    return []
 }
 
 async function searchSymbolCommand() {
@@ -65,7 +109,7 @@ async function searchSymbolCommand() {
         const doc = await vscode.workspace.openTextDocument(file);
         const text = doc.getText();
         
-        const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\]/g, '\$&');
+        const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&');
         const fastRegex = new RegExp(`\b${escapedSymbol}\b`);
         if (!fastRegex.test(text)) continue;
 
@@ -106,6 +150,10 @@ async function searchSymbolCommand() {
     }
 }
 
+/**
+ * Jump to the definition of a term
+ * @returns 
+ */
 async function goToDefinitionCommand() {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
@@ -177,7 +225,7 @@ async function findDefinitions(symbol) {
 
         for (const rel of DEFINING_RELATIONS) {
             const pattern = new RegExp(
-                `\(\s*${rel}\s+(${symbol.replace(/[.*+?^${}()|[\]\]/g, '\$&')})\s`,
+                `\(\s*${rel}\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&')})\s`,
                 'g'
             );
 
@@ -201,7 +249,7 @@ async function findDefinitions(symbol) {
         }
 
         const subclassPattern = new RegExp(
-            `\(\s*subclass\s+(${symbol.replace(/[.*+?^${}()|[\]\]/g, '\$&')})\s+([^\s\)]+)`,
+            `\(\s*subclass\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&')})\s+([^\s\)]+)`,
             'g'
         );
         let match;
@@ -259,9 +307,9 @@ async function browseInSigmaCommand() {
     }
 
     const config = vscode.workspace.getConfiguration('sumo');
-    const sigmaUrl = config.get('sigmaUrl') || 'http://sigma.ontologyportal.org:8080/sigma/Browse.jsp';
-    const kb = config.get('knowledgeBase') || 'SUMO';
-    const lang = config.get('language') || 'EnglishLanguage';
+    const sigmaUrl = config.get('sigma.url') || 'http://sigma.ontologyportal.org:8080/sigma/Browse.jsp';
+    const kb = currentKB || 'SUMO';
+    const lang = config.get('general.language') || 'EnglishLanguage';
 
     const url = `${sigmaUrl}?kb=${encodeURIComponent(kb)}&lang=${encodeURIComponent(lang)}&flang=SUO-KIF&term=${encodeURIComponent(symbol)}`;
 
@@ -271,25 +319,35 @@ async function browseInSigmaCommand() {
 async function buildWorkspaceDefinitions() {
     workspaceDefinitions = {};
 
-    const files = await getKBFiles();
-
-    for (const file of files) {
-        try {
-            const doc = await vscode.workspace.openTextDocument(file);
-            updateDocumentDefinitions(doc);
-        } catch (e) {
+    const kbs = await getKBs();
+    for (const kb of kbs) {
+        const files = await getKBFiles(kb);
+    
+        for (const file of files) {
+            try {
+                const doc = await vscode.workspace.openTextDocument(file);
+                updateDocumentDefinitions(doc, kb);
+            } catch (e) {
+            }
         }
     }
 }
 
-function updateDocumentDefinitions(document) {
+/**
+ * populate the relationships for symbols in a document in a kb
+ * @param {vscode.TextDocument} document 
+ * @param {undefined | string} kb 
+ */
+function updateDocumentDefinitions(document, kb = undefined) {
+    if (!kb) kb = currentKB;
+    if (!kb) return;
     const text = document.getText();
     const uri = document.uri.fsPath;
 
-    for (const sym of Object.keys(workspaceDefinitions)) {
-        workspaceDefinitions[sym] = workspaceDefinitions[sym].filter(d => d.file !== uri);
-        if (workspaceDefinitions[sym].length === 0) {
-            delete workspaceDefinitions[sym];
+    for (const sym of Object.keys(workspaceDefinitions[kb])) {
+        workspaceDefinitions[kb][sym] = workspaceDefinitions[kb][sym].filter(d => d.file !== uri);
+        if (workspaceDefinitions[kb][sym].length === 0) {
+            delete workspaceDefinitions[kb][sym];
         }
     }
 
@@ -305,11 +363,11 @@ function updateDocumentDefinitions(document) {
             const startOffset = match.index;
             const lineNum = document.positionAt(startOffset).line;
 
-            if (!workspaceDefinitions[symbol]) {
-                workspaceDefinitions[symbol] = [];
+            if (!workspaceDefinitions[kb][symbol]) {
+                workspaceDefinitions[kb][symbol] = [];
             }
 
-            workspaceDefinitions[symbol].push({
+            workspaceDefinitions[kb][symbol].push({
                 file: uri,
                 line: lineNum,
                 type: rel,
@@ -327,5 +385,7 @@ module.exports = {
     findDefinitions,
     browseInSigmaCommand,
     buildWorkspaceDefinitions,
-    updateDocumentDefinitions
+    updateDocumentDefinitions,
+    setKB,
+    getKB
 };

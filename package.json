@@ -86,7 +86,7 @@
       },
       {
         "command": "sumo.kbExplorer.refresh",
-        "title": "Refresh",
+        "title": "SUMO: Reload KB",
         "icon": "$(refresh)"
       },
       {
@@ -105,50 +105,100 @@
         "command": "sumo.formatAxiom",
         "key": "ctrl+shift+f",
         "mac": "cmd+shift+f",
-        "when": "editorLangId == sumo && editorHasSelection"
+        "when": "editorLangId == suo-kif && editorHasSelection"
       },
       {
         "command": "sumo.goToDefinition",
         "key": "f12",
         "mac": "f12",
-        "when": "editorLangId == sumo"
+        "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB"
       },
       {
         "command": "sumo.browseInSigma",
         "key": "ctrl+shift+b",
         "mac": "cmd+shift+b",
-        "when": "editorLangId == sumo"
+        "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB"
       }
     ],
     "views": {
       "explorer": [
         {
           "id": "sumo.kbExplorer",
-          "name": "Knowledge Bases"
+          "name": "Knowledge Bases",
+          "icon": "$(search)"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "sumo.kbExplorer",
-        "contents": "No knowledge bases loaded.\n[Open Knowledge Bases](command:sumo.openKnowledgeBase)"
+        "contents": "SUMO Extension has not been started.\n[Start Sigma](command:sumo.openKnowledgeBase)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "sumo.searchSymbol",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.showTaxonomy",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.formatAxiom",
+          "when": "editorLangId == suo-kif"
+        },
+        {
+          "command": "sumo.goToDefinition",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.browseInSigma",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.checkErrors",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.queryProver",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.runProverOnScope",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.generateTPTP",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.createKnowledgeBase",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.kbExplorer.refresh",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.kbExplorer.addFile",
+          "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.kbExplorer.removeFile",
+          "when": "sumo.KBOpened && sumo.inKB"
+        }
+      ],
       "view/title": [
         {
           "command": "sumo.kbExplorer.refresh",
-          "when": "view == sumo.kbExplorer",
-          "group": "navigation"
-        },
-        {
-          "command": "sumo.openKnowledgeBase",
-          "when": "view == sumo.kbExplorer",
+          "when": "view == sumo.kbExplorer && sumo.KBOpened",
           "group": "navigation"
         },
         {
           "command": "sumo.createKnowledgeBase",
-          "when": "view == sumo.kbExplorer",
+          "when": "view == sumo.kbExplorer && sumo.KBOpened",
           "group": "navigation"
         }
       ],
@@ -177,48 +227,43 @@
       "editor/context": [
         {
           "command": "sumo.searchSymbol",
-          "when": "editorLangId == sumo",
+          "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB",
           "group": "navigation@1"
         },
         {
           "command": "sumo.goToDefinition",
-          "when": "editorLangId == sumo",
+          "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB",
           "group": "navigation@2"
         },
         {
           "command": "sumo.showTaxonomy",
-          "when": "editorLangId == sumo",
+          "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB",
           "group": "navigation@3"
         },
         {
           "command": "sumo.browseInSigma",
-          "when": "editorLangId == sumo",
+          "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB",
           "group": "navigation@4"
         },
         {
           "command": "sumo.formatAxiom",
-          "when": "editorLangId == sumo && editorHasSelection",
+          "when": "editorLangId == suo-kif && editorHasSelection",
           "group": "1_modification@1"
         },
         {
           "command": "sumo.checkErrors",
-          "when": "editorLangId == sumo",
+          "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB",
           "group": "1_modification@2"
         },
         {
           "command": "sumo.queryProver",
-          "when": "editorLangId == sumo && editorHasSelection",
+          "when": "editorLangId == suo-kif && editorHasSelection && sumo.KBOpened && sumo.inKB",
           "group": "1_modification@3"
         },
         {
           "command": "sumo.runProverOnScope",
-          "when": "editorLangId == sumo",
+          "when": "editorLangId == suo-kif && sumo.KBOpened && sumo.inKB",
           "group": "1_modification@4"
-        },
-        {
-          "command": "sumo.generateTPTP",
-          "when": "editorLangId == sumo",
-          "group": "1_modification@5"
         }
       ]
     },

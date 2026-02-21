@@ -9,15 +9,14 @@ const {
     isWithinConfiguredKB 
 } = require('./src/sigma');
 
-const { KBTreeProvider } = require('./src/sigma/kb-tree');
+const { KBTreeProvider } = require('./src/kb-tree');
 
 const { 
     searchSymbolCommand, 
     goToDefinitionCommand, 
     provideDefinition,
-    buildWorkspaceDefinitions,
     updateDocumentDefinitions,
-    getKBFiles
+    getKB
 } = require('./src/navigation');
 
 const { showTaxonomyCommand } = require('./src/taxonomy');
@@ -49,7 +48,8 @@ const {
     openKnowledgeBaseCommand, 
     addFileToKBCommand, 
     removeFileFromKBCommand, 
-    createKnowledgeBaseCommand 
+    createKnowledgeBaseCommand,
+    updateActiveEditorContext
 } = require('./src/kb-management');
 
 const { 
@@ -64,10 +64,16 @@ const { provideTPTPDocumentSymbols } = require('./src/tptp-provider');
 let kbTreeProvider;
 let symbolMetadata = {};
 
+/**
+ * Extension activation entrypoint
+ * @param {vscode.ExtensionContext} context 
+ */
 async function activate(context) {
+    // Create diagnostic collector
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('sumo');
     context.subscriptions.push(diagnosticCollection);
 
+    // Create a new provider to track the knowledge bases on the system
     kbTreeProvider = new KBTreeProvider();
     setKBTreeProvider(kbTreeProvider);
 
@@ -93,6 +99,14 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.addFile', addFileToKBCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.removeFile', removeFileFromKBCommand));
 
+    // Listen for editor focus changes
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(updateActiveEditorContext)
+    );
+
+    // Set initial state
+    updateActiveEditorContext(vscode.window.activeTextEditor);
+
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
         if (event.affectsConfiguration("sumo.sigma.runtime")) {
             await getSigmaRuntime().shutdown();
@@ -100,32 +114,17 @@ async function activate(context) {
         }
     }));
 
-    buildWorkspaceDefinitions();
-
     const kbStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     kbStatusBarItem.command = 'sumo.generateTPTP';
     context.subscriptions.push(kbStatusBarItem);
 
     const updateKBStatusBar = async () => {
-        const config = vscode.workspace.getConfiguration('sumo');
-        const enforceKBContext = config.get('enforceKBContext') !== false;
-        const kbContext = await isWithinConfiguredKB();
+        const kbContext = getKB();
 
         if (kbContext) {
-            kbStatusBarItem.text = `$(database) KB: ${kbContext.kbName || 'Configured'}`;
-            kbStatusBarItem.tooltip = `Working within Sigma KB\nConfig: ${kbContext.configPath}\nClick to generate TPTP`;
+            kbStatusBarItem.text = `$(database) KB: ${kbContext}`;
+            kbStatusBarItem.tooltip = `Working within Sigma KB\nConfig: ${kbContext}\nClick to generate TPTP`;
             kbStatusBarItem.backgroundColor = undefined;
-            kbStatusBarItem.show();
-        } else if (await findConfigXml()) {
-            if (enforceKBContext) {
-                kbStatusBarItem.text = `$(warning) KB: Outside`;
-                kbStatusBarItem.tooltip = 'Not within a configured KB directory. KB-level operations disabled.\nOpen a folder from your Sigma KBs directory to enable.\nOr disable "sumo.enforceKBContext" setting.';
-                kbStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-            } else {
-                kbStatusBarItem.text = `$(unlock) KB: Unrestricted`;
-                kbStatusBarItem.tooltip = 'KB enforcement disabled. All operations available.\nClick to generate TPTP';
-                kbStatusBarItem.backgroundColor = undefined;
-            }
             kbStatusBarItem.show();
         } else {
             kbStatusBarItem.hide();
@@ -134,13 +133,7 @@ async function activate(context) {
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(updateKBStatusBar),
-        vscode.window.onDidChangeActiveTextEditor(updateKBStatusBar),
-        vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('sumo.enforceKBContext') ||
-                e.affectsConfiguration('sumo.configXmlPath')) {
-                updateKBStatusBar();
-            }
-        })
+        vscode.window.onDidChangeActiveTextEditor(updateKBStatusBar)
     );
 
     updateKBStatusBar();
@@ -228,6 +221,10 @@ async function activate(context) {
     );
 }
 
+/**
+ * Extension deactivation entrypoint
+ * @param {vscode.ExtensionContext} context 
+ */
 async function deactivate() {
     await getSigmaRuntime().shutdown();
 }

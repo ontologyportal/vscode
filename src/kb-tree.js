@@ -7,6 +7,12 @@
 const vscode = require('vscode');
 const path = require('path');
 
+/**
+ * @extends vscode.TreeItem
+ * @class
+ * @constructor
+ * @public
+ */
 class KBNode extends vscode.TreeItem {
     constructor(kb) {
         super(kb.name, vscode.TreeItemCollapsibleState.Expanded);
@@ -14,6 +20,11 @@ class KBNode extends vscode.TreeItem {
         this.description = `${kb.constituents.length} file${kb.constituents.length !== 1 ? 's' : ''}`;
         this.tooltip = `Knowledge Base: ${kb.name}\n${kb.constituents.length} constituent file(s)\nConfig: ${kb.configPath}`;
         this.iconPath = new vscode.ThemeIcon('database');
+        /** 
+         * Keep track of the knowledge base used by this node
+         * @type {{ name: string, constituents: string[], configPath: string, kbDir: string }}
+         * @public
+         */
         this.kb = kb;
     }
 }
@@ -40,6 +51,11 @@ class KBTreeProvider {
     constructor() {
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+        /** 
+         * Keep track of the knowledge base used by this node
+         * @type {{ name: string, constituents: string[], configPath: string, kbDir: string }[]}
+         * @public
+         */
         this.kbs = [];
     }
 

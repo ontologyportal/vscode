@@ -59,6 +59,8 @@ async function showTaxonomyCommand(argSymbol) {
 
 async function buildWorkspaceTaxonomy() {
     const files = await getKBFiles();
+    console.log("files!!!")
+    console.log(files)
     const parentGraph = {}; // child -> [parents]
     const childGraph = {}; // parent -> [children]
     const docMap = {}; // symbol -> { text, lang }

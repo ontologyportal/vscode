@@ -9,8 +9,7 @@ function tokenize(text) {
     while (i < text.length) {
         const char = text[i];
         if (/\s/.test(char)) { i++; continue; }
-        if (char === ';') { while (i < text.length && text[i] !== '
-') i++; continue; }
+        if (char === ';') { while (i < text.length && text[i] !== '\n') i++; continue; }
         if (char === '"') {
             const start = i; i++;
             while (i < text.length) {
@@ -47,7 +46,6 @@ function parse(tokens, document, diagnostics) {
             if (current >= tokens.length) {
                 diagnostics.push(new vscode.Diagnostic(
                     new vscode.Range(document.positionAt(node.start), document.positionAt(node.start + 1)),
-                    'Unclosed parenthesis: Expected ')'',
                     vscode.DiagnosticSeverity.Error
                 ));
             }

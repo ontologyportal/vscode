@@ -71,8 +71,7 @@ async function generateTPTPCommand(context) {
                 let tptpContent = await compileFormulas(context, getTopLevelExpressions(kifContent));
 
                 const tptpDoc = await vscode.workspace.openTextDocument({
-                    content: tptpContent.join("
-"),
+                    content: tptpContent.join("\n"),
                     language: 'tptp'
                 });
 

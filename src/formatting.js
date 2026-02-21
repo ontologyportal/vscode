@@ -82,8 +82,7 @@ function formatSExpression(text) {
 
         if (token.type === 'LPAREN') {
             if (prevToken && prevToken.type !== 'LPAREN') {
-                result += '
-' + ' '.repeat(indent * indentSize);
+                result += '\n' + ' '.repeat(indent * indentSize);
             }
             result += '(';
             parenStack.push({ indent, type: 'normal' });
@@ -108,8 +107,7 @@ function formatSExpression(text) {
                         result += ' ' + token.value;
                     } else if (LOGIC_OPS.includes(getHeadAtPosition(tokens, i)) ||
                                QUANTIFIERS.includes(getHeadAtPosition(tokens, i))) {
-                        result += '
-' + ' '.repeat(indent * indentSize) + token.value;
+                        result += '\n' + ' '.repeat(indent * indentSize) + token.value;
                     } else {
                         result += ' ' + token.value;
                     }
@@ -152,8 +150,7 @@ function formatDocument(document) {
         if (i >= text.length) break;
 
         if (text[i] === ';') {
-            while (i < text.length && text[i] !== '
-') i++;
+            while (i < text.length && text[i] !== '\n') i++;
             continue;
         }
 
@@ -171,8 +168,7 @@ function formatDocument(document) {
                         i++;
                     }
                 } else if (text[i] === ';') {
-                    while (i < text.length && text[i] !== '
-') i++;
+                    while (i < text.length && text[i] !== '\n') i++;
                     continue;
                 }
                 i++;

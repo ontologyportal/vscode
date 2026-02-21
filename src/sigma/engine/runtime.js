@@ -93,6 +93,16 @@ class SigmaRuntime {
     }
 
     /**
+     * Get contents to a file
+     * @param { string } path The path of the file to read
+     * @param { string } contents The contents to write to the file
+     * @returns { Promise<void> }
+     */
+    async writeFile(path, contents) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
      * Get the name of the current runtime
      * @returns { string }
      */
@@ -124,6 +134,11 @@ class SigmaRuntime {
 class LocalRuntime extends SigmaRuntime {
     constructor() {
         super();
+        /**
+         * The Java interface runner
+         * @type {LocalRuntimeRunner}
+         * @public
+         */
         this.runner = new LocalRuntimeRunner();
     }
 
@@ -166,6 +181,10 @@ class LocalRuntime extends SigmaRuntime {
             return await fs.promises.readFile(path, 'utf8');
         }
         return null;
+    }
+    
+    async writeFile(path, contents) {
+        return await fs.promises.writeFile(path, contents, { encoding: 'utf-8', flag: 'w' });
     }
 
     getName() {

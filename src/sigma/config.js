@@ -296,13 +296,26 @@ async function getKBConstituentsFromConfig(kbName = null) {
 
 /**
  * Add a constituent file to an existing KB entry in config.xml.
- * @param {string} configPath - Path to config.xml
  * @param {string} kbName - Name of the knowledge base to modify
- * @param {string} filename - Filename attribute value to add
+ * @param {string} filename - Filename attribute value to add\
+ * @returns {Promise<void>}
  */
-function addFileToConfig(configPath, kbName, filename) {
-    const content = fs.readFileSync(configPath, 'utf-8');
+async function addFileToConfig(kbName, filename) {
+    const configPath = await findConfigXml();
+    if (!configPath) {
+        const action = await vscode.window.showErrorMessage(
+            'Could not find Sigma config.xml. Set the path in settings or create one first.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.sigma.configXmlPath');
+        }
+        return;
+    }
+    const runtime = getSigmaRuntime(); // get runtime
 
+    const content = await runtime.readFile(configPath); // read config
+    // Locate the KB entry in the config file
     const escapedName = kbName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const kbStart = content.search(new RegExp(`<kb\\s+name\\s*=\\s*"${escapedName}"`));
     if (kbStart === -1) {
@@ -315,19 +328,33 @@ function addFileToConfig(configPath, kbName, filename) {
         throw new Error(`Malformed config.xml: no closing </kb> for "${kbName}"`);
     }
 
+    // Add the new constituent filename to the config.xml
     const newLine = `    <constituent filename="${filename}" />\n  `;
     const newContent = content.slice(0, kbClose) + newLine + content.slice(kbClose);
-    fs.writeFileSync(configPath, newContent, 'utf-8');
+    await runtime.writeFile(configPath, newContent);
 }
 
 /**
  * Remove a constituent file from a KB entry in config.xml.
- * @param {string} configPath - Path to config.xml
  * @param {string} kbName - Name of the knowledge base (used for error messages)
  * @param {string} filename - The exact filename attribute value to remove
+ * @returns {Promise<void>}
  */
-function removeFileFromConfig(configPath, kbName, filename) {
-    const content = fs.readFileSync(configPath, 'utf-8');
+async function removeFileFromConfig(kbName, filename) {
+    const configPath = await findConfigXml();
+    if (!configPath) {
+        const action = await vscode.window.showErrorMessage(
+            'Could not find Sigma config.xml. Set the path in settings or create one first.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.sigma.configXmlPath');
+        }
+        return;
+    }
+    const runtime = getSigmaRuntime(); // get runtime
+
+    const content = await runtime.readFile(configPath);
 
     const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const constituentRegex = new RegExp(
@@ -340,8 +367,56 @@ function removeFileFromConfig(configPath, kbName, filename) {
         throw new Error(`Constituent "${filename}" not found in KB "${kbName}" in config.xml`);
     }
 
-    fs.writeFileSync(configPath, newContent, 'utf-8');
+    await runtime.writeFile(configPath, newContent);
 }
+
+/**
+ * Create a new KB in the config file
+ * @param {string} kbName The name of the new knowledge base
+ * @returns {Promise<string>} Return the kbDir
+ */
+async function addKBToConfig(kbName) {
+    const configPath = await findConfigXml();
+    if (!configPath) {
+        const action = await vscode.window.showErrorMessage(
+            'Could not find Sigma config.xml. Set the path in settings or create one first.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'sumo.sigma.configXmlPath');
+        }
+        return;
+    }
+
+    const parsedConfig = await parseConfigXml(configPath);
+    if (!parsedConfig) {
+        throw new Error("Could not parse config.xml")
+    }
+        
+    else if (parsedConfig.knowledgeBases && kbName in parsedConfig.knowledgeBases) {
+        throw new Error("There already exists a KB with the name " + kbName);
+    }
+
+    const runtime = getSigmaRuntime(); // get runtime
+    const content = await runtime.readFile(configPath); // read config
+    if (!content) {
+        throw new Error('Could not read content from config.xml');
+    }
+
+    const closeTag = '</configuration>';
+    const configClose = content.lastIndexOf(closeTag);
+    if (configClose === -1) {
+        throw new Error('Malformed config.xml: no closing </configuration> tag');
+    }
+
+    // Construct the new KB entry and insert it before the closing tag
+    const newKBEntry = `  <kb name="${kbName}">\n  </kb>\n`;
+    const newContent = content.slice(0, configClose) + newKBEntry + content.slice(configClose);
+    await runtime.writeFile(configPath, newContent);
+
+    return parsedConfig.preferences.kbDir;
+}
+
 
 module.exports = {
     findConfigXml,
@@ -349,5 +424,6 @@ module.exports = {
     addFileToConfig,
     removeFileFromConfig,
     isWithinConfiguredKB,
-    getKBConstituentsFromConfig
+    getKBConstituentsFromConfig,
+    addKBToConfig
 }
