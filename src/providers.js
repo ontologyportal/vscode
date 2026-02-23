@@ -1,26 +1,34 @@
 const vscode = require('vscode');
 const { tokenize } = require('./validation');
-
-let symbolMetadata = {};
-
-function setSymbolMetadata(meta) {
-    symbolMetadata = meta;
-}
+const { getWorkspaceMetadata } = require('./navigation');
 
 function provideHover(document, position, token) {
     const range = document.getWordRangeAtPosition(position);
     if (!range) return;
     const word = document.getText(range);
-    const meta = symbolMetadata[word];
-    if (meta && meta.documentation) {
+    const meta = getWorkspaceMetadata()[word];
+    if (meta) {
         const md = new vscode.MarkdownString();
-        md.appendMarkdown(meta.documentation);
-        return new vscode.Hover(md);
+        if (meta.documentation) {
+            md.appendMarkdown(meta.documentation);
+        }
+        if (meta.domains && Object.keys(meta.domains).length > 0) {
+            if (meta.documentation) md.appendMarkdown('\n\n---\n\n');
+            const types = Object.entries(meta.domains)
+                .sort(([a], [b]) => parseInt(a) - parseInt(b))
+                .map(([p, t]) => `**Arg ${p}**: \`${t}\``)
+                .join('  \n');
+            md.appendMarkdown(types);
+        }
+        if (md.value.length > 0) {
+            return new vscode.Hover(md);
+        }
     }
 }
 
 function provideCompletionItems(document, position, token, context) {
     const items = [];
+    const symbolMetadata = getWorkspaceMetadata();
     for (const [key, val] of Object.entries(symbolMetadata)) {
         const item = new vscode.CompletionItem(key, vscode.CompletionItemKind.Function);
         if (val.documentation) {
@@ -62,7 +70,7 @@ function provideSignatureHelp(document, position, token) {
     if (tokens[1].type !== 'ATOM') return null;
     
     const op = tokens[1].value;
-    const meta = symbolMetadata[op];
+    const meta = getWorkspaceMetadata()[op];
     if (!meta) return null;
     
     let siblingCount = 0;
@@ -122,7 +130,6 @@ function provideSignatureHelp(document, position, token) {
 }
 
 module.exports = {
-    setSymbolMetadata,
     provideHover,
     provideCompletionItems,
     provideSignatureHelp

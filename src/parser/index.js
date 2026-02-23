@@ -2,15 +2,29 @@
  * SUMO Parser Module
  */
 
-const { TokenType, tokenize } = require('./tokenizer');
-const { NodeType, parse, getHead, getValue, collectFreeVariables } = require('./parser');
+const {
+    TokenType,
+    tokenize,
+    TokenizerError
+} = require('./tokenizer');
+const {
+    NodeType,
+    ASTNode,
+    ASTListNode,
+    ASTTermNode,
+    TokenList,
+    ParsingError
+} = require('./parser');
+
 
 module.exports = {
     TokenType,
     tokenize,
     NodeType,
-    parse,
-    getHead,
-    getValue,
-    collectFreeVariables
+    ASTNode,
+    ASTListNode,
+    ASTTermNode,
+    TokenList,
+    ParsingError,
+    TokenizerError
 };

@@ -16,7 +16,8 @@ const {
     goToDefinitionCommand, 
     provideDefinition,
     updateDocumentDefinitions,
-    getKB
+    getKB,
+    setDiagnosticCollection
 } = require('./src/navigation');
 
 const { showTaxonomyCommand } = require('./src/taxonomy');
@@ -28,12 +29,7 @@ const {
 } = require('./src/formatting');
 
 const { 
-    checkErrorsCommand, 
-    tokenize, 
-    parse, 
-    collectMetadata, 
-    validateNode, 
-    validateVariables
+    checkErrorsCommand
 } = require('./src/validation');
 
 const { 
@@ -43,6 +39,8 @@ const {
 
 const { generateTPTPCommand } = require('./src/generate-tptp');
 
+const { openSumoRepl } = require('./src/sumo-repl');
+
 const { 
     setKBTreeProvider, 
     openKnowledgeBaseCommand, 
@@ -51,9 +49,7 @@ const {
     createKnowledgeBaseCommand,
     updateActiveEditorContext
 } = require('./src/kb-management');
-
 const { 
-    setSymbolMetadata, 
     provideHover, 
     provideCompletionItems, 
     provideSignatureHelp 
@@ -62,7 +58,6 @@ const {
 const { provideTPTPDocumentSymbols } = require('./src/tptp-provider');
 
 let kbTreeProvider;
-let symbolMetadata = {};
 
 /**
  * Extension activation entrypoint
@@ -72,6 +67,7 @@ async function activate(context) {
     // Create diagnostic collector
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('sumo');
     context.subscriptions.push(diagnosticCollection);
+    setDiagnosticCollection(diagnosticCollection);
 
     // Create a new provider to track the knowledge bases on the system
     kbTreeProvider = new KBTreeProvider();
@@ -85,7 +81,7 @@ async function activate(context) {
 
     // Register Commands
     context.subscriptions.push(vscode.commands.registerCommand('sumo.searchSymbol', searchSymbolCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('sumo.showTaxonomy', showTaxonomyCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.showTaxonomy', (arg) => showTaxonomyCommand(context, arg)));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.formatAxiom', formatAxiomCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.goToDefinition', goToDefinitionCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.browseInSigma', require('./src/navigation').browseInSigmaCommand));
@@ -93,6 +89,7 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('sumo.queryProver', queryProverCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.runProverOnScope', runProverOnScopeCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.generateTPTP', () => generateTPTPCommand(context)));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.openRepl', openSumoRepl));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.openKnowledgeBase', openKnowledgeBaseCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.createKnowledgeBase', createKnowledgeBaseCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.refresh', openKnowledgeBaseCommand));
@@ -139,7 +136,7 @@ async function activate(context) {
     updateKBStatusBar();
 
     context.subscriptions.push(
-        vscode.languages.registerDefinitionProvider('sumo', {
+        vscode.languages.registerDefinitionProvider('suo-kif', {
             provideDefinition(document, position, token) {
                 return provideDefinition(document, position);
             }
@@ -147,7 +144,7 @@ async function activate(context) {
     );
 
     context.subscriptions.push(
-        vscode.languages.registerDocumentFormattingEditProvider('sumo', {
+        vscode.languages.registerDocumentFormattingEditProvider('suo-kif', {
             provideDocumentFormattingEdits(document) {
                 return formatDocument(document);
             }
@@ -155,7 +152,7 @@ async function activate(context) {
     );
 
     context.subscriptions.push(
-        vscode.languages.registerDocumentRangeFormattingEditProvider('sumo', {
+        vscode.languages.registerDocumentRangeFormattingEditProvider('suo-kif', {
             provideDocumentRangeFormattingEdits(document, range) {
                 return formatRange(document, range);
             }
@@ -163,21 +160,8 @@ async function activate(context) {
     );
 
     const validate = (document) => {
-        if (document.languageId !== 'sumo') return;
-
-        const diagnostics = [];
-        const text = document.getText();
-        const tokens = tokenize(text);
-        const ast = parse(tokens, document, diagnostics);
-        symbolMetadata = collectMetadata(ast);
-        setSymbolMetadata(symbolMetadata);
-
-        ast.forEach(node => validateNode(node, diagnostics, symbolMetadata));
-        validateVariables(ast, diagnostics);
-
-        diagnosticCollection.set(document.uri, diagnostics);
-
-        updateDocumentDefinitions(document);
+        if (document.languageId !== 'suo-kif') return;
+        updateFileDefinitions(document);
     };
 
     context.subscriptions.push(
@@ -189,7 +173,7 @@ async function activate(context) {
     vscode.workspace.textDocuments.forEach(validate);
 
     context.subscriptions.push(
-        vscode.languages.registerHoverProvider('sumo', {
+        vscode.languages.registerHoverProvider('suo-kif', {
             provideHover(document, position, token) {
                 return provideHover(document, position, token);
             }
@@ -197,7 +181,7 @@ async function activate(context) {
     );
 
     context.subscriptions.push(
-        vscode.languages.registerCompletionItemProvider('sumo', {
+        vscode.languages.registerCompletionItemProvider('suo-kif', {
             provideCompletionItems(document, position, token, context) {
                 return provideCompletionItems(document, position, token, context);
             }
@@ -213,7 +197,7 @@ async function activate(context) {
     );
 
     context.subscriptions.push(
-        vscode.languages.registerSignatureHelpProvider('sumo', {
+        vscode.languages.registerSignatureHelpProvider('suo-kif', {
             provideSignatureHelp(document, position, token) {
                 return provideSignatureHelp(document, position, token);
             }

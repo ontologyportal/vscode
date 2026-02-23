@@ -129,6 +129,27 @@ class SigmaRuntime {
     async compileFormulas(context, formulas) {
         throw new Error("Cannot invoke abstract interface functions");
     }
+
+    /**
+     * Assert a statement into a knowledge base
+     * @param {string} kbName 
+     * @param {string} statement 
+     * @returns {Promise<string[]>}
+     */
+    async tell(kbName, statement) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
+     * Query a knowledge base
+     * @param {string} kbName 
+     * @param {string} query 
+     * @param {object} options 
+     * @returns {Promise<object>}
+     */
+    async ask(kbName, query, options) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
 }
 
 class LocalRuntime extends SigmaRuntime {
@@ -198,13 +219,34 @@ class LocalRuntime extends SigmaRuntime {
      * @returns { string }
      */
     async compileKB(context, kbName) {
-        const tempDir = context.storageUri;
-        const tempFile = path.join(tempDir, `${kbName}-${this.getName}.tptp`);
-        writeFile(tempFile, kbName);
+        const tempDir = context.storageUri.fsPath;
+        const tempFile = path.join(tempDir, `${kbName}-${Date.now()}.tptp`);
+        return await this.runner.writeFile(tempFile, kbName);
     }
 
     async compileFormulas(context, formulas) {
-        throw new Error("Compiling formulas is currently not implemented for native sigma")
+        // Since the Java bridge currently works best with KBs, we'll try to use the selected KB if available
+        const kbName = vscode.workspace.getConfiguration('sumo').get('sigma.knowledgeBase') || 'SUMO';
+        const tempDir = context.storageUri.fsPath;
+        const tempFile = path.join(tempDir, `formulas-${Date.now()}.tptp`);
+        
+        // Use the first formula as a conjecture if possible, or just compile the KB
+        // This is a limitation of the current Java bridge writeFile implementation
+        const conjecture = formulas.length > 0 ? formulas[0] : null;
+        const filePath = await this.runner.writeFile(tempFile, kbName, conjecture);
+        
+        const content = await fs.promises.readFile(filePath, 'utf8');
+        return content.split('\n').filter(line => 
+            line.trim().startsWith('fof(') || line.trim().startsWith('tff(')
+        );
+    }
+
+    async tell(kbName, statement) {
+        return await this.runner.tell(kbName, statement);
+    }
+
+    async ask(kbName, query, options) {
+        return await this.runner.ask(kbName, query, options);
     }
 }
 
@@ -297,6 +339,14 @@ class DockerRuntime extends SigmaRuntime {
     async compileFormulas(context, formulas) {
         throw new Error("Compiling formulas is currently not implemented for dockerized sigma")
     }
+
+    async tell(kbName, statement) {
+        throw new Error("Tell functionality is currently not implemented for dockerized sigma")
+    }
+
+    async ask(kbName, query, options) {
+        throw new Error("Ask functionality is currently not implemented for dockerized sigma")
+    }
 }
 
 class NativeRuntime extends SigmaRuntime {
@@ -321,7 +371,21 @@ class NativeRuntime extends SigmaRuntime {
     }
 
     async compileFormulas(context, formulas) {
-        throw new Error("Compiling formulas is currently not implemented for the native JS implementation")
+        const { convertFormulas, setLang, setHideNumbers } = require('./native/index.js');
+        setLang('fof');
+        setHideNumbers(true);
+        const result = convertFormulas(formulas, 'workspace');
+        return result.content.split('\n').filter(line => 
+            line.trim().startsWith('fof(') || line.trim().startsWith('tff(')
+        );
+    }
+
+    async tell(kbName, statement) {
+        throw new Error("Tell functionality is currently not implemented for the native JS implementation")
+    }
+
+    async ask(kbName, query, options) {
+        throw new Error("Ask functionality is currently not implemented for the native JS implementation")
     }
 }
 

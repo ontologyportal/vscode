@@ -229,7 +229,7 @@ async function createKnowledgeBaseCommand() {
         'Open KB'
     );
     if (action === 'Open KB') {
-        const folderUri = vscode.Uri.file(folderPath);
+        const folderUri = vscode.Uri.file(kbDir);
         vscode.workspace.updateWorkspaceFolders(
             (vscode.workspace.workspaceFolders || []).length, 0,
             { uri: folderUri, name: `KB: ${kbName}` }

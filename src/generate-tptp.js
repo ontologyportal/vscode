@@ -20,7 +20,7 @@ async function generateTPTPCommand(context) {
         });
     }
     
-    if (editor && editor.document.languageId === 'sumo') {
+    if (editor && editor.document.languageId === 'suo-kif') {
         options.push({ label: 'Current File', description: 'Convert the current file to TPTP' });
         options.push({ label: 'Selection Only', description: 'Convert selected text to TPTP' });
     }

@@ -150,6 +150,71 @@ class LocalRuntimeRunner {
 
         return fileName;
     }
+
+    /**
+     * Perform a "Tell" operation to assert a statement into a knowledge base
+     * @param {string} kbName - The name of the KB
+     * @param {string} statement - The SUO-KIF statement to assert
+     * @returns {Promise<string[]>} - Any errors or status messages
+     */
+    async tell(kbName, statement) {
+        const jvm = this.gateway.jvm;
+        const KBmanager = await jvm.com.articulate.sigma.KBmanager;
+        const mgr = await KBmanager.getMgr();
+        const kb = await mgr.getKB(kbName);
+        if (!kb) throw new Error(`Unknown KB: ${kbName}`);
+
+        // sessionId can be empty or a default for extension usage
+        const result = await kb.tell(statement, "");
+        return result; // Usually an ArrayList of strings (errors/warnings)
+    }
+
+    /**
+     * Perform an "Ask" operation to query a knowledge base
+     * @param {string} kbName - The name of the KB
+     * @param {string} query - The SUO-KIF query
+     * @param {object} options - Options for the query (timeout, maxAnswers, engine)
+     * @returns {Promise<object>} - The result including answers and proof
+     */
+    async ask(kbName, query, options = {}) {
+        const jvm = this.gateway.jvm;
+        const KBmanager = await jvm.com.articulate.sigma.KBmanager;
+        const mgr = await KBmanager.getMgr();
+        const kb = await mgr.getKB(kbName);
+        if (!kb) throw new Error(`Unknown KB: ${kbName}`);
+
+        const timeout = options.timeout || 30;
+        const maxAnswers = options.maxAnswers || 1;
+        const engine = options.engine || 'vampire';
+
+        let resultObj;
+        if (engine === 'vampire') {
+            resultObj = await kb.askVampire(query, timeout, maxAnswers, "");
+        } else if (engine === 'eprover') {
+            resultObj = await kb.askEProver(query, timeout, maxAnswers);
+        } else {
+            throw new Error(`Unsupported engine: ${engine}`);
+        }
+
+        const output = await resultObj.output;
+        const qlist = await resultObj.qlist;
+        const status = await resultObj.getResult();
+
+        // Process proof if available
+        const TPTP3ProofProcessor = await jvm.com.articulate.sigma.trans.TPTP3ProofProcessor;
+        const tpp = await new TPTP3ProofProcessor();
+        await tpp.parseProofOutput(output, query, kb, qlist);
+
+        const answers = await tpp.answers; // ArrayList of answers
+        const proof = await tpp.proof; // ArrayList of proof steps
+
+        return {
+            status,
+            output,
+            answers: await this.gateway.help.toArray(answers),
+            proof: await this.gateway.help.toArray(proof)
+        };
+    }
 }
 
 module.exports = {

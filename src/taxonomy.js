@@ -1,12 +1,20 @@
 const vscode = require('vscode');
-const { getKBFiles } = require('./navigation');
+const { getWorkspaceTaxonomy } = require('./navigation');
 const path = require('path');
 const fs = require('fs');
+const h = require('hyperscript');
 
-async function showTaxonomyCommand(argSymbol) {
+/**
+ * Command subscription callback to show taxonomy window for a symbol
+ * @param {vscode.ExtensionContext} context 
+ * @param {string} argSymbol The symbol to look for
+ * @returns 
+ */
+async function showTaxonomyCommand(context, argSymbol) {
     let symbol = (typeof argSymbol === 'string') ? argSymbol : undefined;
     
     if (!symbol) {
+        // Get the active text editor and the section to find the symbol
         const editor = vscode.window.activeTextEditor;
         if (!editor) return;
 
@@ -20,23 +28,64 @@ async function showTaxonomyCommand(argSymbol) {
         symbol = document.getText(range);
     }
     
+    // Create a new panel for the view
     const panel = vscode.window.createWebviewPanel(
         'suoKifTaxonomy',
         `Taxonomy: ${symbol}`,
         vscode.ViewColumn.Beside,
-        { enableScripts: true }
+        { 
+            enableScripts: true,
+            localResourceRoots: [
+                // The library for the mermaid diagram renderer, allow the webview to access it
+                vscode.Uri.file(path.join(context.extensionPath, 'node_modules', 'mermaid', 'dist'))
+            ]
+        }
     );
 
-    const updateWebview = async (targetSymbol) => {
+    const mermaidUri = panel.webview.asWebviewUri(vscode.Uri.file(
+        path.join(context.extensionPath, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js')
+    ));
+
+    // Keep track of the view changes so the user can go back to it
+    let history = [];
+    let currentIndex = -1;
+
+    // Callback to update the panel
+    const updateWebview = async (targetSymbol, fromHistory = false) => {
+        if (!fromHistory) {
+            // We are creating a new view and NOT navigating backwards
+            //  move the cursor
+            if (currentIndex < history.length - 1) {
+                history = history.slice(0, currentIndex + 1);
+            }
+            history.push(targetSymbol);
+            currentIndex++;
+        }
+
+        // Panel title
         panel.title = `Taxonomy: ${targetSymbol}`;
-        panel.webview.html = `<!DOCTYPE html><html><body style="font-family: sans-serif; padding: 10px;"><h3>Loading taxonomy for ${targetSymbol}...</h3></body></html>`;
+        // Loading screen content
+        const html = h('html', { lang: 'en' },
+            h('body', { style: { fontFamily: 'sans-serif', padding: '10px' } },
+                h('h3', `Loading taxonomy for ${targetSymbol}...`)
+            )
+        );
+        panel.webview.html = `<!DOCTYPE html>${html.outerHTML}`;
         
-        const { parents, children, documentation } = await buildWorkspaceTaxonomy();
-        const doc = (documentation[targetSymbol]) 
+        const { parents, children, documentation } = getWorkspaceTaxonomy();
+        let doc = (documentation[targetSymbol]) 
             ? documentation[targetSymbol]
             : "No documentation found in workspace.";
 
-        panel.webview.html = generateTaxonomyHtml(targetSymbol, parents, children, doc);
+        // Linkify cross-references &%SYMBOL
+        doc = doc.replace(/&%([a-zA-Z0-9_\-]+)/g, '<a href="#" onclick="openSymbol(\'$1\')">$1</a>');
+
+        const historyState = {
+            canGoBack: currentIndex > 0,
+            canGoForward: currentIndex < history.length - 1
+        };
+
+        panel.webview.html = generateTaxonomyHtml(targetSymbol, parents, children, doc, mermaidUri, panel.webview.cspSource, historyState);
     };
 
     panel.webview.onDidReceiveMessage(
@@ -44,6 +93,18 @@ async function showTaxonomyCommand(argSymbol) {
             switch (message.command) {
                 case 'openTaxonomy':
                     updateWebview(message.symbol);
+                    return;
+                case 'goBack':
+                    if (currentIndex > 0) {
+                        currentIndex--;
+                        updateWebview(history[currentIndex], true);
+                    }
+                    return;
+                case 'goForward':
+                    if (currentIndex < history.length - 1) {
+                        currentIndex++;
+                        updateWebview(history[currentIndex], true);
+                    }
                     return;
                 case 'searchSymbol':
                     vscode.commands.executeCommand('sumo.searchSymbol', message.symbol);
@@ -57,114 +118,79 @@ async function showTaxonomyCommand(argSymbol) {
     updateWebview(symbol);
 }
 
-async function buildWorkspaceTaxonomy() {
-    const files = await getKBFiles();
-    console.log("files!!!")
-    console.log(files)
-    const parentGraph = {}; // child -> [parents]
-    const childGraph = {}; // parent -> [children]
-    const docMap = {}; // symbol -> { text, lang }
-    const targetLang = vscode.workspace.getConfiguration('sumo').get('language') || 'EnglishLanguage';
+function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, mermaidUri, cspSource, historyState) {
+    const { canGoBack, canGoForward } = historyState || { canGoBack: false, canGoForward: false };
+    // Build graph data for Mermaid
+    const nodes = new Set([symbol]);
+    const edges = [];
 
-    for (const file of files) {
-        const doc = await vscode.workspace.openTextDocument(file);
-        const text = doc.getText().replace(/("(?:\[\s\S]|[^"])*")|;.*$/gm, (m, g1) => g1 || '');
-        
-        const regex = /\(\s*(subclass|subrelation)\s+([^?\s\)][^\s\)]*)\s+([^?\s\)][^\s\)]*)/g;
-        let match;
-        while ((match = regex.exec(text)) !== null) {
-            const child = match[2];
-            const parent = match[3];
+    // 1. Traverse Ancestors (Upwards)
+    const queue = [symbol];
+    const visited = new Set([symbol]);
+
+    while (queue.length > 0) {
+        const curr = queue.shift();
+        const parents = parentGraph[curr] || [];
+        parents.forEach(p => {
+            // p is { name, type }
+            const pName = p.name;
+            const type = p.type;
             
-            if (!parentGraph[child]) parentGraph[child] = [];
-            if (!parentGraph[child].includes(parent)) parentGraph[child].push(parent);
+            // Add edge: Parent -> Child
+            edges.push({ from: pName, to: curr, label: type });
+            nodes.add(pName);
 
-            if (!childGraph[parent]) childGraph[parent] = [];
-            if (!childGraph[parent].includes(child)) childGraph[parent].push(child);
-        }
-
-        const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\]|\[\s\S])*)"/g;
-        let docMatch;
-        while ((docMatch = docRegex.exec(text)) !== null) {
-            const sym = docMatch[1];
-            const lang = docMatch[2];
-            let docStr = docMatch[3];
-            docStr = docStr.replace(/"/g, '"');
-            
-            if (!docMap[sym] || lang === targetLang || docMap[sym].lang !== targetLang) {
-                docMap[sym] = { text: docStr, lang: lang };
+            if (!visited.has(pName)) {
+                visited.add(pName);
+                queue.push(pName);
             }
-        }
-    }
-    
-    const documentation = {};
-    for (const [s, d] of Object.entries(docMap)) {
-        documentation[s] = d.text;
-    }
-
-    return { parents: parentGraph, children: childGraph, documentation };
-}
-
-function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation) {
-    const renderTree = (curr, graph, visited = new Set()) => {
-        if (visited.has(curr)) return `<li><strong class="symbol-node" data-symbol="${curr}">${curr}</strong> (cycle)</li>`;
-        visited.add(curr);
-        
-        const nextNodes = graph[curr] || [];
-        if (nextNodes.length === 0) return `<li><strong class="symbol-node" data-symbol="${curr}">${curr}</strong></li>`;
-        
-        let html = `<li><strong class="symbol-node" data-symbol="${curr}">${curr}</strong><ul>`;
-        nextNodes.forEach(n => {
-            html += renderTree(n, graph, new Set(visited));
         });
-        html += `</ul></li>`;
-        return html;
-    };
+    }
 
-    const { tree: ancestorTree, roots: ancestorRoots } = buildAncestorGraph(symbol, parentGraph);
+    // 2. Direct Children (Downwards)
+    const children = childGraph[symbol] || [];
+    children.forEach(c => {
+        edges.push({ from: symbol, to: c.name, label: c.type });
+        nodes.add(c.name);
+    });
 
-    const directChildren = childGraph[symbol] || [];
-    const childrenHtml = directChildren.length > 0 
-        ? `<ul>${directChildren.map(c => `<li><strong class="symbol-node" data-symbol="${c}">${c}</strong></li>`).join('')}</ul>` 
-        : '<em>No direct subclasses found.</em>';
+    // Generate Mermaid String
+    let mermaidGraph = 'graph TD\n';
+    mermaidGraph += 'classDef default fill:#2d2d2d,stroke:#555,stroke-width:1px,color:#fff;\n';
+    mermaidGraph += 'classDef target fill:#0e639c,stroke:#007acc,stroke-width:2px,color:#fff;\n';
+    
+    nodes.forEach(n => {
+        const className = (n === symbol) ? 'target' : 'default';
+        // We use the symbol itself as ID.
+        mermaidGraph += `${n}["${n}"]:::${className}\n`;
+        mermaidGraph += `click ${n} callOpenSymbol\n`;
+    });
+
+    edges.forEach(e => {
+        mermaidGraph += `${e.from} -->|${e.label}| ${e.to}\n`;
+    });
 
     return `
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${cspSource}; style-src 'unsafe-inline';">
+            <script src="${mermaidUri}"></script>
             <style>
                 body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-editor-foreground); background-color: var(--vscode-editor-background); }
                 h2 { color: var(--vscode-textLink-foreground); border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 5px; }
-                ul { list-style-type: none; border-left: 1px solid var(--vscode-tree-indentGuidesStroke); padding-left: 15px; }
-                li { margin: 5px 0; }
-                li > strong {
-                    transition: transform 0.2s ease, color 0.2s ease;
-                    display: inline-block;
-                    cursor: context-menu;
-                }
-                li > strong:hover { transform: translateX(5px); color: var(--vscode-textLink-activeForeground); cursor: default; }
-                
-                #context-menu {
-                    display: none;
-                    position: absolute;
-                    z-index: 1000;
-                    background-color: var(--vscode-menu-background);
-                    color: var(--vscode-menu-foreground);
-                    border: 1px solid var(--vscode-menu-border);
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-                    padding: 4px 0;
-                    min-width: 150px;
-                }
-                .menu-item {
-                    padding: 4px 12px;
+                .nav-buttons { margin-bottom: 15px; display: flex; gap: 10px; }
+                .nav-btn {
+                    background-color: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                    border: none;
+                    padding: 6px 12px;
                     cursor: pointer;
-                    display: block;
-                    font-size: 13px;
                 }
-                .menu-item:hover {
-                    background-color: var(--vscode-menu-selectionBackground);
-                    color: var(--vscode-menu-selectionForeground);
+                .nav-btn:hover:not(:disabled) { background-color: var(--vscode-button-hoverBackground); }
+                .nav-btn:disabled { 
+                    opacity: 0.5; cursor: default; background-color: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);
                 }
                 .doc-block {
                     margin-bottom: 15px;
@@ -172,99 +198,56 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation) {
                     background-color: var(--vscode-textBlockQuote-background);
                     border-left: 4px solid var(--vscode-textBlockQuote-border);
                 }
+                .doc-block a {
+                    color: var(--vscode-textLink-foreground);
+                    text-decoration: none;
+                }
+                .doc-block a:hover {
+                    text-decoration: underline;
+                }
+                .mermaid {
+                    margin-top: 20px;
+                }
             </style>
         </head>
         <body>
+            <div class="nav-buttons">
+                <button class="nav-btn" onclick="goBack()" ${canGoBack ? '' : 'disabled'}>&larr; Back</button>
+                <button class="nav-btn" onclick="goForward()" ${canGoForward ? '' : 'disabled'}>Forward &rarr;</button>
+            </div>
             <h1>Taxonomy: ${symbol}</h1>
             ${documentation ? `<div class="doc-block">${documentation}</div>` : ''}
-            <h2>Superclasses (Ancestors)</h2>
-            <ul>
-                ${ancestorRoots.map(r => renderTree(r, ancestorTree)).join('') || '<li><em>No superclasses found.</em></li>'}
-            </ul>
-            <h2>Direct Subclasses (Children)</h2>
-            ${childrenHtml}
-
-            <div id="context-menu">
-                <div class="menu-item" id="menu-focus">Focus Symbol</div>
-                <div class="menu-item" id="menu-search">Search in Workspace</div>
+            
+            <div class="mermaid">
+                ${mermaidGraph}
             </div>
 
             <script>
                 const vscode = acquireVsCodeApi();
-                const menu = document.getElementById('context-menu');
-                let currentSymbol = null;
+                
+                // Initialize Mermaid
+                const theme = document.body.classList.contains('vscode-dark') ? 'dark' : 'default';
+                mermaid.initialize({ startOnLoad: true, theme: theme });
 
-                document.addEventListener('contextmenu', (e) => {
-                    const target = e.target;
-                    if (target.tagName === 'STRONG' && target.classList.contains('symbol-node')) {
-                        e.preventDefault();
-                        currentSymbol = target.getAttribute('data-symbol');
-                        menu.style.display = 'block';
-                        menu.style.left = e.pageX + 'px';
-                        menu.style.top = e.pageY + 'px';
-                    } else {
-                        menu.style.display = 'none';
-                    }
-                });
+                // Global function for documentation links
+                window.openSymbol = (sym) => {
+                    vscode.postMessage({ command: 'openTaxonomy', symbol: sym });
+                };
 
-                document.addEventListener('click', () => {
-                    menu.style.display = 'none';
-                });
+                // Global function for Mermaid clicks
+                window.callOpenSymbol = (sym) => {
+                    vscode.postMessage({ command: 'openTaxonomy', symbol: sym });
+                };
 
-                document.getElementById('menu-focus').addEventListener('click', () => {
-                    if (currentSymbol) {
-                        vscode.postMessage({ command: 'openTaxonomy', symbol: currentSymbol });
-                    }
-                });
-
-                document.getElementById('menu-search').addEventListener('click', () => {
-                    if (currentSymbol) {
-                        vscode.postMessage({ command: 'searchSymbol', symbol: currentSymbol });
-                    }
-                });
+                window.goBack = () => vscode.postMessage({ command: 'goBack' });
+                window.goForward = () => vscode.postMessage({ command: 'goForward' });
             </script>
         </body>
         </html>
     `;
 }
 
-function buildAncestorGraph(symbol, parentGraph) {
-    const tree = {}; 
-    const visited = new Set();
-    const queue = [symbol];
-    const nodesInTree = new Set([symbol]);
-
-    while (queue.length > 0) {
-        const child = queue.shift();
-        if (visited.has(child)) continue;
-        visited.add(child);
-
-        const parents = parentGraph[child] || [];
-        parents.forEach(p => {
-            if (!tree[p]) tree[p] = [];
-            if (!tree[p].includes(child)) tree[p].push(child);
-            
-            nodesInTree.add(p);
-            queue.push(p);
-        });
-    }
-
-    const roots = [];
-    const allChildren = new Set();
-    Object.values(tree).forEach(children => children.forEach(c => allChildren.add(c)));
-
-    nodesInTree.forEach(node => {
-        if (!allChildren.has(node) && node !== symbol) {
-            roots.push(node);
-        }
-    });
-
-    return { tree, roots };
-}
-
 module.exports = {
     showTaxonomyCommand,
-    buildWorkspaceTaxonomy,
     generateTaxonomyHtml,
-    buildAncestorGraph
 };

@@ -38,7 +38,7 @@ async function compileFormulas(context, formulas) {
     outputChannel.appendLine(`Compiling combined formula: ${combinedFormula}`);
     outputChannel.appendLine(`Runtime: ${runtime.getName()}`);
 
-    runtime.compileFormulas(context, formulas);
+    return runtime.compileFormulas(context, formulas);
 }
 
 module.exports = { compileKB, compileFormulas };

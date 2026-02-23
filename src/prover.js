@@ -14,7 +14,8 @@ const {
 const { 
     parseKIFFormulas, 
     tptpParseSUOKIFString,
-    setLanguage
+    setLanguage,
+    convertFormulas
 } = require('./sigma/engine/native/index.js');
 
 async function queryProverCommand() {
@@ -219,7 +220,7 @@ async function runProverOnScopeCommand() {
     }
 
     // Use compileFormulas from sigma/index.js which handles runtime-specific compilation
-    const context = vscode.extensions.getExtension('articulate.sumo').extensionContext;
+    const context = vscode.extensions.getExtension('ontologyportal.sumo').extensionContext;
     const expressions = getTopLevelExpressions(kifContent);
     const tptpContent = await compileFormulas(context, expressions);
     const axiomCount = tptpContent.length;

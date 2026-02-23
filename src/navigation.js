@@ -1,12 +1,40 @@
 const vscode = require('vscode');
 const { DEFINING_RELATIONS } = require('./const');
-const { tokenize, parse } = require('./validation');
 const { findConfigXml, parseConfigXml } = require('./sigma/config');
 const fs = require('fs');
 const path = require('path');
+const { TokenList, ASTNode, tokenize, NodeType } = require('./parser');
+const {
+    parse,
+    collectMetadata,
+    validateNode,
+    validateVariables,
+    validateArity,
+    validateRelationUsage,
+    validateCoverage
+} = require('./validation');
+
+/**
+ * A full, preparsed, AST of the KB, organized by KB and constituent file
+ * @type {{[kb: string]: { [constituent: string]: ASTNode[]}}}
+ */
+let parsedNodes = {};
 
 /** @type {{[kb: string]: { [sym: string]: {file, line, type, context}[]}}} */
 let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
+
+/** @type {{[fsPath: string]: any}} */
+let fileMetadataCache = {};
+
+/** @type {any} */
+let workspaceMetadataCache = null;
+
+/** @type {vscode.DiagnosticCollection} */
+let diagnosticCollection;
+
+function setDiagnosticCollection(collection) {
+    diagnosticCollection = collection;
+}
 
 /** @type {string} */
 let currentKB = null;
@@ -101,34 +129,45 @@ async function searchSymbolCommand() {
     if (!selectedOption) return;
 
     const filterPos = selectedOption.label === 'All' ? null : parseInt(selectedOption.label);
-    
+
     const files = await getKBFiles();
     const matches = [];
 
     for (const file of files) {
         const doc = await vscode.workspace.openTextDocument(file);
         const text = doc.getText();
-        
+
         const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&');
         const fastRegex = new RegExp(`\b${escapedSymbol}\b`);
         if (!fastRegex.test(text)) continue;
 
-        const tokens = tokenize(text);
-        const ast = parse(tokens, doc, []); 
+        // Use cached AST from the last updateFileDefinitions call if available,
+        // otherwise parse fresh to avoid referencing a stale or missing local parse function.
+        let ast = currentKB ? parsedNodes[currentKB]?.[file.fsPath] : null;
+        if (!ast) {
+            try {
+                ast = new TokenList(tokenize(text, file.fsPath)).parse();
+            } catch {
+                ast = [];
+            }
+        }
 
         const visit = (node, indexInParent) => {
-            if (node.type === 'atom') {
-                if (node.value === symbol) {
+            if (node.type === NodeType.ATOM) {
+                if (node.startToken.value === symbol) {
                     if (filterPos === null || (indexInParent !== undefined && indexInParent + 1 === filterPos)) {
+                        const pos = doc.positionAt(node.start.offset);
+                        const endPos = doc.positionAt(node.start.offset + symbol.length);
+                        const nodeRange = new vscode.Range(pos, endPos);
                         matches.push({
-                            label: `${vscode.workspace.asRelativePath(file)}:${node.range.start.line + 1}`,
-                            description: doc.lineAt(node.range.start.line).text.trim(),
+                            label: `${vscode.workspace.asRelativePath(file)}:${pos.line + 1}`,
+                            description: doc.lineAt(pos.line).text.trim(),
                             uri: file,
-                            range: node.range
+                            range: nodeRange
                         });
                     }
                 }
-            } else if (node.type === 'list') {
+            } else if (node.type === NodeType.LIST) {
                 node.children.forEach((child, idx) => visit(child, idx));
             }
         };
@@ -152,7 +191,7 @@ async function searchSymbolCommand() {
 
 /**
  * Jump to the definition of a term
- * @returns 
+ * @returns
  */
 async function goToDefinitionCommand() {
     const editor = vscode.window.activeTextEditor;
@@ -286,6 +325,10 @@ async function findDefinitions(symbol) {
     return definitions;
 }
 
+/**
+ * Open the current term in the Sigma instance pointed to in the settings
+ * @returns {void}
+ */
 async function browseInSigmaCommand() {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
@@ -316,27 +359,208 @@ async function browseInSigmaCommand() {
     vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
+/**
+ * Perfom full preparsing of the files in all the KBs and their constituents,
+ *  then compile the definitions from the AST nodes
+ */
 async function buildWorkspaceDefinitions() {
+    const kbs = await getKBs(); // Get all the KBs
+    parsedNodes = {};
     workspaceDefinitions = {};
-
-    const kbs = await getKBs();
-    for (const kb of kbs) {
-        const files = await getKBFiles(kb);
-    
+    taxonomyCache = {};
+    for (const kb of kbs) { // iterate through the KBs
+        const files = await getKBFiles(kb); // get all the KB files
+        parsedNodes[kb] = {};
+        workspaceDefinitions[kb] = {};
         for (const file of files) {
+            if (diagnosticCollection) {
+                diagnosticCollection.delete(file);
+            }
             try {
                 const doc = await vscode.workspace.openTextDocument(file);
-                updateDocumentDefinitions(doc, kb);
+                updateFileDefinitions(doc, kb);
             } catch (e) {
+                // console.error(`Error parsing ${file.fsPath}:`, e);
             }
         }
     }
 }
 
 /**
+ * Parse a document, run all validation passes, and update the workspace definition index.
+ * This is the single entry point for processing a file — it replaces the separate
+ * tokenize/parse calls that previously existed alongside validation.js.
+ *
+ * Diagnostics from both parsing (ParsingError, TokenizerError) and validation
+ * (logic structure, arity, variable scoping) are collected in one pass and
+ * written to the diagnostic collection together.
+ *
+ * @param {vscode.TextDocument} document
+ * @param {string | undefined} kb  The knowledge base this document belongs to.
+ *   If omitted, the function attempts to infer it from parsedNodes.
+ */
+function updateFileDefinitions(document, kb = undefined) {
+    const fsPath = document.uri.fsPath;
+    const text = document.getText();
+
+    if (!kb) {
+        if (currentKB && parsedNodes[currentKB]) kb = currentKB;
+        else {
+             for (const k in parsedNodes) {
+                 if (parsedNodes[k][fsPath] !== undefined) {
+                     kb = k;
+                     break;
+                 }
+             }
+        }
+    }
+    if (!kb) return;
+
+    if (!parsedNodes[kb]) parsedNodes[kb] = {};
+    if (!workspaceDefinitions[kb]) workspaceDefinitions[kb] = {};
+
+    // --- Parse and validate in one pass ---
+    const diagnostics = [];
+    try {
+        const tokens = tokenize(text, fsPath);
+
+        // parse() from validation.js wraps TokenList and converts any ParsingError
+        // into a diagnostic, returning [] on failure rather than throwing.
+        const ast = parse(tokens, document, diagnostics);
+        parsedNodes[kb][fsPath] = ast;
+
+        if (ast.length > 0) {
+            // Collect domain/documentation metadata needed for arity checking
+            const metadata = collectMetadata(ast);
+            fileMetadataCache[fsPath] = metadata;
+
+            // Run all validation passes, accumulating into the same diagnostics array
+            ast.forEach(node => validateNode(node, diagnostics, metadata, document));
+            validateVariables(ast, diagnostics);
+            validateArity(ast, diagnostics, metadata, document);
+            validateRelationUsage(ast, diagnostics, document);
+            // Pass the KB-wide taxonomy so coverage checks can trace parent chains
+            // across files, not just within the current file.
+            validateCoverage(ast, diagnostics, metadata, document, getWorkspaceTaxonomy());
+        }
+    } catch (e) {
+        // Unexpected error (e.g. TokenizerError from a malformed token).
+        // Add a best-effort diagnostic and log for debugging.
+        // console.error(`Error processing ${fsPath}:`, e);
+        const line = e.line !== undefined ? e.line : 0;
+        const col = e.col !== undefined ? e.col : (e.column !== undefined ? e.column : 0);
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(line, col, line, col),
+            e.message || 'Unknown error',
+            vscode.DiagnosticSeverity.Error
+        ));
+    }
+
+    if (diagnosticCollection) {
+        if (diagnostics.length > 0) {
+            diagnosticCollection.set(document.uri, diagnostics);
+        } else {
+            diagnosticCollection.delete(document.uri);
+        }
+    }
+    workspaceMetadataCache = null;
+
+    // --- Taxonomy cache (relations and docs for the tree view) ---
+    // Extracted via regex rather than the AST so this works even when
+    // the file has parse errors and ast is [].
+    const relations = [];
+    const docs = [];
+    const regex = /\(\s*(subclass|subrelation|instance)\s+([^?\s\)][^\s\)]*)\s+([^?\s\)][^\s\)]*)/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        relations.push({ type: match[1], child: match[2], parent: match[3] });
+    }
+    const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\\]|\[\s\S])*)"/g;
+    let docMatch;
+    while ((docMatch = docRegex.exec(text)) !== null) {
+        let docStr = docMatch[3];
+        docStr = docStr.replace(/"/g, '"');
+        docs.push({ symbol: docMatch[1], lang: docMatch[2], text: docStr });
+    }
+    taxonomyCache[fsPath] = { relations, docs };
+
+    updateDocumentDefinitions(document, kb);
+}
+
+function getWorkspaceTaxonomy() {
+    const parentGraph = {};
+    const childGraph = {};
+    const docMap = {};
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('general.language') || 'EnglishLanguage';
+
+    for (const fsPath in taxonomyCache) {
+        const { relations, docs } = taxonomyCache[fsPath];
+        for (const r of relations) {
+            if (!parentGraph[r.child]) parentGraph[r.child] = [];
+            if (!parentGraph[r.child].some(p => p.name === r.parent && p.type === r.type)) {
+                parentGraph[r.child].push({ name: r.parent, type: r.type });
+            }
+            if (!childGraph[r.parent]) childGraph[r.parent] = [];
+            if (!childGraph[r.parent].some(c => c.name === r.child && c.type === r.type)) {
+                childGraph[r.parent].push({ name: r.child, type: r.type });
+            }
+        }
+        for (const d of docs) {
+            if (!docMap[d.symbol] || d.lang === targetLang || docMap[d.symbol].lang !== targetLang) {
+                docMap[d.symbol] = { text: d.text, lang: d.lang };
+            }
+        }
+    }
+
+    const documentation = {};
+    for (const [s, d] of Object.entries(docMap)) {
+        documentation[s] = d.text;
+    }
+
+    return { parents: parentGraph, children: childGraph, documentation };
+}
+
+/**
+ * Aggregate metadata (domains and documentation) from across all files in the workspace.
+ * Prefers documentation in the target language.
+ * @returns {{ [symbol: string]: { domains: {[pos: number]: string}, documentation: string, docLang: string } }}
+ */
+function getWorkspaceMetadata() {
+    if (workspaceMetadataCache) return workspaceMetadataCache;
+    
+    const combined = {};
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('general.language') || 'EnglishLanguage';
+
+    for (const fsPath in fileMetadataCache) {
+        const metadata = fileMetadataCache[fsPath];
+        for (const [sym, data] of Object.entries(metadata)) {
+            if (!combined[sym]) {
+                combined[sym] = { domains: {}, documentation: '', docLang: '' };
+            }
+
+            // Merge domains: union of all domain declarations found
+            if (data.domains) {
+                Object.assign(combined[sym].domains, data.domains);
+            }
+
+            // Merge documentation: prefer target language
+            if (data.documentation) {
+                const existing = combined[sym];
+                if (!existing.documentation || data.docLang === targetLang || existing.docLang !== targetLang) {
+                    existing.documentation = data.documentation;
+                    existing.docLang = data.docLang;
+                }
+            }
+        }
+    }
+    workspaceMetadataCache = combined;
+    return combined;
+}
+
+/**
  * populate the relationships for symbols in a document in a kb
- * @param {vscode.TextDocument} document 
- * @param {undefined | string} kb 
+ * @param {vscode.TextDocument} document
+ * @param {undefined | string} kb
  */
 function updateDocumentDefinitions(document, kb = undefined) {
     if (!kb) kb = currentKB;
@@ -387,5 +611,9 @@ module.exports = {
     buildWorkspaceDefinitions,
     updateDocumentDefinitions,
     setKB,
-    getKB
+    getKB,
+    setDiagnosticCollection,
+    updateFileDefinitions,
+    getWorkspaceTaxonomy,
+    getWorkspaceMetadata
 };

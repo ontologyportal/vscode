@@ -35,7 +35,7 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:sumo",
+    "onLanguage:suo-kif",
     "onLanguage:tptp"
   ],
   "contributes": {
@@ -75,6 +75,10 @@
       {
         "command": "sumo.generateTPTP",
         "title": "SUMO: Generate TPTP File"
+      },
+      {
+        "command": "sumo.openRepl",
+        "title": "SUMO: Open Interactive REPL (Ask/Tell)"
       },
       {
         "command": "sumo.openKnowledgeBase",
@@ -172,6 +176,10 @@
         {
           "command": "sumo.generateTPTP",
           "when": "sumo.KBOpened && sumo.inKB"
+        },
+        {
+          "command": "sumo.openRepl",
+          "when": "sumo.KBOpened"
         },
         {
           "command": "sumo.createKnowledgeBase",
@@ -424,6 +432,8 @@
   },
   "dependencies": {
     "dockerode": "^4.0.9",
-    "js4j": "^0.1.2"
+    "hyperscript": "^2.0.2",
+    "js4j": "^0.1.2",
+    "mermaid": "^11.12.3"
   }
 }
