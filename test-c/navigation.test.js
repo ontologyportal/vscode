@@ -33,8 +33,8 @@ const realParser = require('../src/parser');
 
 // Convenience: parse KIF text to AST
 function parseKIF(text) {
-    const tokens = realParser.tokenize(text, 'test.kif');
-    return new realParser.TokenList(tokens).parse();
+    const { tokens } = realParser.tokenize(text, 'test.kif');
+    return new realParser.TokenList(tokens).parse().nodes;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,19 +174,16 @@ describe('navigation.js', function () {
     // -----------------------------------------------------------------------
     describe('B11 - updateDocumentDefinitions: invalid regex from unescaped template literal', function () {
 
-        it('confirms the regex pattern uses single-backslash escapes in a template literal', function () {
+        it('B11 (fixed) - template literals now use double-backslash escapes', function () {
             const source = fs.readFileSync(
                 path.join(__dirname, '../src/navigation.js'), 'utf-8'
             );
-            // The regex in updateDocumentDefinitions uses `\(` and `\s` in a template
-            // literal.  Template literals process `\(` as `(` and `\s` as `s` (since
-            // neither is a recognised escape), so the resulting pattern starts with a
-            // bare `(` that opens a capturing group that is never closed.
-            // BUG B11: the source should use `\\(` and `\\s` (double backslash).
-            // Match `new RegExp(` + optional whitespace + backtick + `\(`
-            // The `\\\(` in the regex literal matches the literal two-char sequence \(
-            expect(source).to.match(/new RegExp\(\s*`\\\(/,
-                'BUG B11: updateDocumentDefinitions creates regex with unescaped template escapes'
+            // FIX B11: source should now use \\( (two backslashes on disk) so that
+            // the runtime regex gets a proper \( (escaped paren, not a group opener).
+            // `[\s\S]*?` bridges the newline between `new RegExp(` and the template literal.
+            // `\\\\` in the JS regex matches two literal backslash chars on disk.
+            expect(source).to.match(/new RegExp\([\s\S]*?`\\\\\(/,
+                'FIX B11: updateDocumentDefinitions should use \\\\( (double backslash) in template literals'
             );
         });
 
@@ -263,14 +260,17 @@ describe('navigation.js', function () {
             // and extends past the intended end of the documentation string
         });
 
-        it('checks the source for the buggy docRegex pattern', function () {
+        it('B8 (fixed) - docRegex now uses \\\\. instead of [\\s\\S]', function () {
             const source = fs.readFileSync(
                 path.join(__dirname, '../src/navigation.js'), 'utf-8'
             );
-            // BUG B8: source contains [\s\S] instead of \\.
-            expect(source).to.include('[\\s\\S]',
-                'BUG B8: docRegex uses [\\s\\S] (matches any char including ") ' +
-                'instead of \\\\. (backslash + any char)'
+            // FIX B8: source should no longer contain the buggy [\s\S] pattern
+            expect(source).to.not.include('[\\s\\S]',
+                'FIX B8: docRegex should no longer use [\\s\\S] (which matches ")'
+            );
+            // And should instead use \\. (backslash + any char) for escape sequences
+            expect(source).to.include('\\\\.',
+                'FIX B8: docRegex should use \\\\. (backslash + any char)'
             );
         });
     });
@@ -280,14 +280,14 @@ describe('navigation.js', function () {
     // -----------------------------------------------------------------------
     describe('B9 - taxonomyCache is an implicit global', function () {
 
-        it('confirms taxonomyCache has no module-level declaration in source', function () {
+        it('B9 (fixed) - taxonomyCache is now properly declared at module scope', function () {
             const source = fs.readFileSync(
                 path.join(__dirname, '../src/navigation.js'), 'utf-8'
             );
 
-            // Check that there is no let/const/var declaration of taxonomyCache
+            // FIX B9: there should now be a let/const/var declaration of taxonomyCache
             const hasDeclaration = /^(?:let|const|var)\s+taxonomyCache\b/m.test(source);
-            expect(hasDeclaration).to.be.false;
+            expect(hasDeclaration).to.be.true;
         });
 
         it('shows that bare assignment to taxonomyCache creates an implicit global', function () {
@@ -303,7 +303,7 @@ describe('navigation.js', function () {
             );
         });
 
-        it('getWorkspaceTaxonomy throws ReferenceError when called before any file is processed', function () {
+        it('B9 (fixed) - getWorkspaceTaxonomy no longer throws ReferenceError', function () {
             // Fresh require of navigation to reset module state
             const freshVscode = createVSCodeMock(sinon);
             freshVscode._setConfig({ 'general.language': 'EnglishLanguage' });
@@ -328,53 +328,24 @@ describe('navigation.js', function () {
                 }
             });
 
-            // BUG B9: taxonomyCache is never declared with let/const/var at module scope.
-            // When getWorkspaceTaxonomy() is called before buildWorkspaceDefinitions()
-            // or updateFileDefinitions(), `taxonomyCache` is an undeclared variable
-            // and `for (const fsPath in taxonomyCache)` throws ReferenceError.
-            expect(() => freshNav.getWorkspaceTaxonomy()).to.throw();
+            // FIX B9: taxonomyCache is now declared with `let` at module scope,
+            // so getWorkspaceTaxonomy() can be called before any file is processed.
+            expect(() => freshNav.getWorkspaceTaxonomy()).to.not.throw();
         });
     });
 
     // -----------------------------------------------------------------------
     // getWorkspaceTaxonomy / getWorkspaceMetadata / updateFileDefinitions
-    //
-    // NOTE B9: taxonomyCache is an implicit global (never declared).
-    //   Work around: seed global.taxonomyCache = {} in `before()`.
-    //   Remove once B9 is fixed.
-    //
-    // NOTE B11: updateDocumentDefinitions uses unescaped `\(` / `\s` in a
-    //   template literal regex, producing an invalid pattern that throws
-    //   SyntaxError.  These tests catch B11 errors and assert on the parts
-    //   of updateFileDefinitions that run BEFORE the invalid regex is hit.
-    //   Once B11 is fixed, remove the try/catch wrappers.
     // -----------------------------------------------------------------------
-
-    /** Helper: call updateFileDefinitions and tolerate B11 SyntaxError. */
-    function safeUpdateFile(mod, doc, kb) {
-        try {
-            mod.updateFileDefinitions(doc, kb);
-        } catch (e) {
-            // B11: updateDocumentDefinitions creates an invalid regex
-            if (!(e instanceof SyntaxError) || !e.message.includes('Invalid regular expression')) {
-                throw e; // unexpected error — rethrow
-            }
-        }
-    }
 
     describe('getWorkspaceTaxonomy()', function () {
 
-        before(function () {
-            // B9 workaround
-            if (typeof global.taxonomyCache === 'undefined') global.taxonomyCache = {};
-        });
-
-        it('returns parents, children, and documentation objects (blocked by B11)', function () {
+        it('returns parents, children, and documentation objects', function () {
             const { mod } = loadNavigation();
             mod.setKB('TestKB');
             const kif = '(subclass Cat Mammal)\n(documentation Cat EnglishLanguage "A cat.")';
             const doc = createMockDocument(kif, '/test/foo.kif');
-            safeUpdateFile(mod, doc, 'TestKB');
+            mod.updateFileDefinitions(doc, 'TestKB');
 
             const taxonomy = mod.getWorkspaceTaxonomy();
             expect(taxonomy).to.have.property('parents');
@@ -382,24 +353,24 @@ describe('navigation.js', function () {
             expect(taxonomy).to.have.property('documentation');
         });
 
-        it('reflects subclass relations in the parents graph (blocked by B11)', function () {
+        it('reflects subclass relations in the parents graph', function () {
             const { mod } = loadNavigation();
             mod.setKB('TestKB');
             const kif = '(subclass Cat Mammal)';
             const doc = createMockDocument(kif, '/test/kif1.kif');
-            safeUpdateFile(mod, doc, 'TestKB');
+            mod.updateFileDefinitions(doc, 'TestKB');
 
             const taxonomy = mod.getWorkspaceTaxonomy();
             expect(taxonomy.parents).to.have.property('Cat');
             expect(taxonomy.parents.Cat.some(p => p.name === 'Mammal')).to.be.true;
         });
 
-        it('reflects instance relations in the parents graph (blocked by B11)', function () {
+        it('reflects instance relations in the parents graph', function () {
             const { mod } = loadNavigation();
             mod.setKB('TestKB');
             const kif = '(instance Rover Dog)';
             const doc = createMockDocument(kif, '/test/kif2.kif');
-            safeUpdateFile(mod, doc, 'TestKB');
+            mod.updateFileDefinitions(doc, 'TestKB');
 
             const taxonomy = mod.getWorkspaceTaxonomy();
             expect(taxonomy.parents).to.have.property('Rover');
@@ -411,25 +382,21 @@ describe('navigation.js', function () {
     // -----------------------------------------------------------------------
     describe('getWorkspaceMetadata()', function () {
 
-        before(function () {
-            if (typeof global.taxonomyCache === 'undefined') global.taxonomyCache = {};
-        });
-
-        it('aggregates documentation metadata from processed files (blocked by B11)', function () {
+        it('aggregates documentation metadata from processed files', function () {
             const { mod } = loadNavigation({ 'general.language': 'EnglishLanguage' });
             mod.setKB('TestKB');
             const kif = '(documentation knows EnglishLanguage "A knowledge relation.")';
-            safeUpdateFile(mod, createMockDocument(kif, '/test/b.kif'), 'TestKB');
+            mod.updateFileDefinitions(createMockDocument(kif, '/test/b.kif'), 'TestKB');
 
             const meta = mod.getWorkspaceMetadata();
             expect(meta).to.have.property('knows');
             expect(meta.knows.documentation).to.include('knowledge');
         });
 
-        it('caches the result until a new file is processed (blocked by B11)', function () {
+        it('caches the result until a new file is processed', function () {
             const { mod } = loadNavigation();
             mod.setKB('TestKB');
-            safeUpdateFile(mod, createMockDocument('(subclass Foo Bar)', '/test/c.kif'), 'TestKB');
+            mod.updateFileDefinitions(createMockDocument('(subclass Foo Bar)', '/test/c.kif'), 'TestKB');
 
             const first = mod.getWorkspaceMetadata();
             const second = mod.getWorkspaceMetadata();
@@ -442,28 +409,18 @@ describe('navigation.js', function () {
     // -----------------------------------------------------------------------
     describe('updateFileDefinitions()', function () {
 
-        before(function () {
-            if (typeof global.taxonomyCache === 'undefined') global.taxonomyCache = {};
-        });
-
-        it('B11 - updateDocumentDefinitions throws SyntaxError for invalid regex', function () {
-            // This directly proves B11: updateFileDefinitions propagates a SyntaxError
-            // from the invalid regex in updateDocumentDefinitions.
+        it('B11 (fixed) - updateFileDefinitions no longer throws SyntaxError', function () {
+            // FIX B11: the template literal regex now uses \\( so the pattern is valid.
             const { mod, vscode } = loadNavigation();
             mod.setKB('TestKB');
             const collection = vscode.languages.createDiagnosticCollection('test');
             mod.setDiagnosticCollection(collection);
 
             const doc = createMockDocument('(instance Foo Bar)', '/test/b11.kif');
-            expect(() => mod.updateFileDefinitions(doc, 'TestKB')).to.throw(SyntaxError,
-                /Invalid regular expression/,
-                'BUG B11: updateDocumentDefinitions creates an invalid regex from the template literal'
-            );
+            expect(() => mod.updateFileDefinitions(doc, 'TestKB')).to.not.throw(SyntaxError);
         });
 
-        it('populates diagnostics for parse errors (parse runs before B11)', function () {
-            // The parse + validate passes run BEFORE updateDocumentDefinitions,
-            // so diagnostics ARE populated even though B11 fires later.
+        it('populates diagnostics for parse errors', function () {
             const { mod, vscode } = loadNavigation();
             mod.setKB('TestKB');
             const collection = vscode.languages.createDiagnosticCollection('test');
@@ -471,21 +428,21 @@ describe('navigation.js', function () {
 
             const kif = '(instance Foo'; // unclosed paren
             const doc = createMockDocument(kif, '/test/err.kif');
-            safeUpdateFile(mod, doc, 'TestKB');
+            mod.updateFileDefinitions(doc, 'TestKB');
 
             const diags = collection.get('/test/err.kif');
             expect(diags).to.have.lengthOf.at.least(1);
             expect(diags[0].severity).to.equal(0); // Error
         });
 
-        it('clears diagnostics when document becomes valid (blocked by B11 after fix)', function () {
+        it('clears diagnostics when document becomes valid', function () {
             const { mod, vscode } = loadNavigation();
             mod.setKB('TestKB');
             const collection = vscode.languages.createDiagnosticCollection('test');
             mod.setDiagnosticCollection(collection);
 
             const badDoc = createMockDocument('(instance Foo', '/test/x.kif');
-            safeUpdateFile(mod, badDoc, 'TestKB');
+            mod.updateFileDefinitions(badDoc, 'TestKB');
             expect(collection.get('/test/x.kif')).to.have.lengthOf.at.least(1);
 
             // Use a documentation statement: collectMetadata does NOT set defNode for it,
@@ -494,7 +451,7 @@ describe('navigation.js', function () {
                 '(documentation Foo EnglishLanguage "A description.")',
                 '/test/x.kif'
             );
-            safeUpdateFile(mod, goodDoc, 'TestKB');
+            mod.updateFileDefinitions(goodDoc, 'TestKB');
 
             const remaining = collection.get('/test/x.kif');
             expect(!remaining || remaining.length === 0).to.be.true;

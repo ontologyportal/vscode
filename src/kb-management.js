@@ -134,7 +134,7 @@ async function addFileToKBCommand(node) {
             filename = path.basename(uri.fsPath);
             try {
                 const content = fs.readFileSync(uri.fsPath, "utf-8");
-                const destPath = path.join(kbDir, filename);
+                let destPath = path.join(kbDir, filename);
                 let i = 1;
                 while (await runtime.existsAtPath(destPath)) {
                     // File exists there already, add a new integer to the end (like Sigma does)

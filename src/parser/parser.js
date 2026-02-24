@@ -14,8 +14,8 @@ class ParsingError extends Error {
      * @param {string} error The error string
      * @param {string|undefined} range An optional line to show with the bad string 
      */
-    constructor(file, line, column, error, range) {
-        super(`[${file ? file + ':' : ''}${line}:${column}]`);
+    constructor(file, line, column, error, end, range) {
+        super(`[${file ? file + ':' : ''}${line}:${column}] ${error}`);
         /** @type {number} */
         this.line = line;
         /** @type {number} */
@@ -34,6 +34,7 @@ class ParsingError extends Error {
 const NodeType = {
     LIST: 'list',
     ATOM: 'atom',
+    OPERATOR: 'operator',
     STRING: 'string',
     NUMBER: 'number',
     VARIABLE: 'variable',
@@ -42,6 +43,7 @@ const NodeType = {
 
 const termNodeTypes = [
     NodeType.ATOM,
+    NodeType.OPERATOR,
     NodeType.STRING,
     NodeType.NUMBER,
     NodeType.VARIABLE,
@@ -226,7 +228,8 @@ class TokenList {
 
         // Determine node type from token type
         let nodeType = NodeType.ATOM;
-        if (token.type === TokenType.STRING) nodeType = NodeType.STRING;
+        if (token.type === TokenType.OPERATOR) nodeType = NodeType.OPERATOR;
+        else if (token.type === TokenType.STRING) nodeType = NodeType.STRING;
         else if (token.type === TokenType.NUMBER) nodeType = NodeType.NUMBER;
         else if (token.type === TokenType.VARIABLE) nodeType = NodeType.VARIABLE;
         else if (token.type === TokenType.ROW_VARIABLE) nodeType = NodeType.ROW_VARIABLE;
@@ -240,18 +243,37 @@ class TokenList {
     }
 
     /**
-     * Parse tokens into an AST
-     * @returns {ASTNode[]} Array of AST nodes (top-level expressions)
+     * Parse tokens into an AST, collecting all errors rather than stopping at the first.
+     * After each error the parser advances to the next top-level LPAREN so that
+     * subsequent axioms in the same document can still be parsed.
+     * @returns {{ nodes: ASTNode[], errors: ParsingError[] }}
      */
     parse(restart = true) {
         if (restart) this.current = 0;
         /** @type {ASTNode[]} */
         const nodes = [];
+        /** @type {ParsingError[]} */
+        const errors = [];
         while (this.current < this.tokens.length) {
-            const node = this.walk();
-            if (node) nodes.push(node);
+            try {
+                const node = this.walk();
+                if (node) nodes.push(node);
+            } catch (e) {
+                if (e instanceof ParsingError) {
+                    errors.push(e);
+                    // Recovery: advance past the current token then skip to the
+                    // next LPAREN so we can attempt to parse the next axiom.
+                    this.current++;
+                    while (this.current < this.tokens.length &&
+                           this.tokens[this.current].type !== TokenType.LPAREN) {
+                        this.current++;
+                    }
+                } else {
+                    throw e;
+                }
+            }
         }
-        return nodes;
+        return { nodes, errors };
     }
 }
 

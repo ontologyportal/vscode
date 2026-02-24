@@ -26,12 +26,14 @@ function loadFormatting(configValues) {
     const vscode = createVSCodeMock(sinon);
     vscode._setConfig(configValues || {});
 
-    // tokenize is re-exported from validation; we use the real tokenizer
-    const realTokenize = require('../src/parser/tokenizer').tokenize;
+    // tokenize is re-exported from validation; wrap the real tokenizer to match
+    // tokenizeValidation's interface: accepts {text, doc?, path?}, returns Token[]
+    const rawTokenize = require('../src/parser/tokenizer').tokenize;
+    const mockTokenize = (source) => rawTokenize(source.text || '', source.path).tokens;
 
     const mod = proxyquire('../src/formatting', {
         vscode,
-        './validation': { tokenize: realTokenize }
+        './validation': { tokenize: mockTokenize }
     });
 
     return { mod, vscode };
@@ -84,52 +86,44 @@ describe('formatting.js', function () {
     // -----------------------------------------------------------------------
     // B4: wrong config key — 'formatIndentSize' vs 'general.formatIndentSize'
     // -----------------------------------------------------------------------
-    describe('B4 - formatSExpression uses wrong config key for indent size', function () {
+    describe('B4 (fixed) - formatSExpression now reads "general.formatIndentSize"', function () {
 
-        it('should read indent size from "general.formatIndentSize" but reads from "formatIndentSize" instead', function () {
-            // Configure via the CORRECT key (general.formatIndentSize)
-            const { mod } = loadFormatting({ 'general.formatIndentSize': 4 });
-
-            // A nested expression that would show indentation differences.
-            // NOTE: '=>' is not a valid ATOM for the tokenizer (starts with '='),
-            // so we use 'and' / 'not' which ARE valid lowercase ATOMs.
+        it('setting "general.formatIndentSize" changes the indent size', function () {
             const input = '(and (instance Foo Animal) (and (instance Foo Object) (instance Bar Object)))';
+
+            // With the correct key set to 4, output should use 4-space indent
+            const { mod } = loadFormatting({ 'general.formatIndentSize': 4 });
             const result = mod.formatSExpression(input);
 
-            // BUG B4: the code does config.get('formatIndentSize') which returns
-            // undefined (since only 'general.formatIndentSize' is set), so it
-            // always falls back to 2-space indentation regardless of the setting.
-            //
-            // A module with NO config key also falls back to 2 spaces.
-            // If B4 were fixed, 'general.formatIndentSize': 4 would produce 4-space output
-            // that differs from the default. Until then, setting the correct key has no effect.
+            // With no key set, output should use the 2-space default
             const { mod: modDefault } = loadFormatting({});
             const resultDefault = modDefault.formatSExpression(input);
 
-            // BUG B4: both produce identical 2-space output because the correct key is ignored.
-            expect(result).to.equal(resultDefault,
-                'BUG B4: formatting ignores "general.formatIndentSize"; ' +
-                'setting it to 4 produces the same output as leaving it unset'
+            // FIX B4: the correct key is now read, so 4-space differs from the 2-space default
+            expect(result).to.not.equal(resultDefault,
+                'FIX B4: "general.formatIndentSize": 4 should produce 4-space indentation, ' +
+                'which differs from the default 2-space output'
             );
+            expect(result).to.match(/    /, 'output should contain 4-space indentation');
         });
 
-        it('confirms the buggy config key: formatIndentSize (no prefix) IS honoured', function () {
-            // With the correct key the setting has no effect (B4)
+        it('the old wrong key "formatIndentSize" (no prefix) is now ignored', function () {
+            const input = '(and (instance Foo Animal) (and (instance Foo Object) (instance Bar Object)))';
+
+            // Correct key set to 8 → should use 8-space indent
             const { mod: modCorrectKey } = loadFormatting({ 'general.formatIndentSize': 8 });
-            // With the wrong (actually-used) key it does take effect
+            // Wrong key set to 8 → should now be IGNORED, falls back to default 2 spaces
             const { mod: modWrongKey } = loadFormatting({ 'formatIndentSize': 8 });
 
-            // A 3-level nested expression to demonstrate differing indent widths
-            const input = '(and (instance Foo Animal) (and (instance Foo Object) (instance Bar Object)))';
             const r1 = modCorrectKey.formatSExpression(input);
             const r2 = modWrongKey.formatSExpression(input);
 
-            // r2 uses 8-space indent; r1 falls back to 2 spaces — they differ
-            // This confirms the bug: the wrong key is checked.
+            // FIX B4: the correct key is honoured (8-space), the wrong key is ignored (2-space)
             expect(r1).to.not.equal(r2,
-                'BUG B4: setting "formatIndentSize" (wrong key) affects formatting ' +
-                'but "general.formatIndentSize" (correct key) does not'
+                'FIX B4: correct key "general.formatIndentSize" = 8 gives 8-space indent; ' +
+                'wrong key "formatIndentSize" is ignored and falls back to 2-space default'
             );
+            expect(r1).to.match(/        /, 'correct-key output should have 8-space indentation');
         });
     });
 
@@ -139,7 +133,7 @@ describe('formatting.js', function () {
         it('returns the operator name for a standard expression', function () {
             const { mod } = loadFormatting();
             const { tokenize } = require('../src/parser/tokenizer');
-            const tokens = tokenize('(instance Foo Bar)');
+            const { tokens } = tokenize('(instance Foo Bar)');
             // At index 3 (Bar), head should be 'instance'
             expect(mod.getHeadAtPosition(tokens, 3)).to.equal('instance');
         });
@@ -147,7 +141,7 @@ describe('formatting.js', function () {
         it('returns null when no enclosing paren', function () {
             const { mod } = loadFormatting();
             const { tokenize } = require('../src/parser/tokenizer');
-            const tokens = tokenize('foo bar');
+            const { tokens } = tokenize('foo bar');
             expect(mod.getHeadAtPosition(tokens, 1)).to.be.null;
         });
     });
@@ -221,40 +215,31 @@ describe('formatting.js', function () {
         // -------------------------------------------------------------------
         // B5: backslash-escape check in string scanning is broken
         // -------------------------------------------------------------------
-        it('B5 - source-level check: escape detection uses empty string instead of backslash', function () {
-            // NOTE: The tokenizer at src/parser/tokenizer.js does NOT currently
-            // support backslash (`\`) in string literals — it throws TokenizerError.
-            // This means formatDocument cannot format any expression that contains
-            // a documentation string with backslash escapes at all.
-            //
-            // B5 is a latent bug in the paren-balance scanner of formatDocument
-            // (lines ~160-175): it attempts to skip over escape sequences inside
-            // strings using `if (text[i] === '') i++`, but `''` (empty string)
-            // can never equal a single character.  The intended check is `'\\'`.
-            // When the tokenizer is eventually fixed to accept `\`, this bug will
-            // surface and corrupt the S-expression boundary detection.
+        it('B5 (fixed) - escape detection now uses backslash instead of empty string', function () {
             const source = require('fs').readFileSync(
                 require('path').join(__dirname, '../src/formatting.js'), 'utf-8'
             );
-            // BUG B5: the source must be updated to use '\\' not ''
-            expect(source).to.include("text[i] === ''",
-                'BUG B5: escape-detection check uses empty string literal "" ' +
-                'instead of backslash "\\\\" — should be: if (text[i] === \'\\\\\') i++'
+            // FIX B5: source now uses '\\' (the backslash character) for escape detection
+            expect(source).to.include("text[i] === '\\\\'",
+                'FIX B5: escape-detection check should use backslash "\\\\", not empty string ""'
+            );
+            // And the buggy empty-string form should be gone
+            expect(source).to.not.include("text[i] === ''",
+                'FIX B5: empty string literal "" should no longer appear as the escape check'
             );
         });
 
-        it('B5 & B4 - source-level: wrong config key and wrong escape check both present', function () {
+        it('B5 & B4 (fixed) - correct config key and correct escape check both present', function () {
             const source = require('fs').readFileSync(
                 require('path').join(__dirname, '../src/formatting.js'), 'utf-8'
             );
-            // BUG B4: the source reads 'formatIndentSize' (no 'general.' prefix)
-            expect(source).to.include("config.get('formatIndentSize')",
-                'BUG B4: source still uses wrong config key "formatIndentSize" ' +
-                'instead of "general.formatIndentSize"'
+            // FIX B4: source now reads 'general.formatIndentSize'
+            expect(source).to.include("config.get('general.formatIndentSize')",
+                'FIX B4: source should use correct key "general.formatIndentSize"'
             );
-            // BUG B5: the escape check is `text[i] === ''` which is never true
-            expect(source).to.include("text[i] === ''",
-                'BUG B5: escape-detection check uses empty string literal'
+            // FIX B5: the escape check is now `text[i] === '\\'`
+            expect(source).to.include("text[i] === '\\\\'",
+                'FIX B5: escape-detection check should use backslash "\\\\"'
             );
         });
     });

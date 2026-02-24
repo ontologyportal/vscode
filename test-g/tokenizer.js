@@ -97,7 +97,7 @@ function tokenize(text, file = 'unknown') {
     
             // Skip comments (semicolon to end of line)
             if (char === ';') {
-                offset += len - col;
+                offset += len - col + 1;
                 break;
             }
     
@@ -192,7 +192,7 @@ function tokenize(text, file = 'unknown') {
                 type = TokenType.VARIABLE;
                 if (!charSet.initialChar.includes(value.at(1))) {
                     errors.push(new TokenizerError(
-                        row, startCol,
+                        row, col,
                         `Variable name must start with a letter after '?': ${value}`,
                         file
                     ));
@@ -201,7 +201,7 @@ function tokenize(text, file = 'unknown') {
                 type = TokenType.ROW_VARIABLE;
                 if (!charSet.initialChar.includes(value.at(1))) {
                     errors.push(new TokenizerError(
-                        row, startCol,
+                        row, col,
                         `Row variable name must start with a letter after '@': ${value}`,
                         file
                     ));

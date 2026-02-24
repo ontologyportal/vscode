@@ -23,11 +23,17 @@ function loadProviders(workspaceMeta) {
 
     const meta = workspaceMeta || {};
 
-    const realTokenize = realParser.tokenize;
+    // Wrap the raw tokenizer to match tokenizeValidation's interface:
+    // accepts {text, doc?, path?, file?} and returns Token[]
+    const rawTokenize = realParser.tokenize;
+    const mockTokenize = (source) => rawTokenize(
+        source.text || '',
+        source.path || source.file
+    ).tokens;
 
     const mod = proxyquire('../src/providers', {
         vscode,
-        './validation': { tokenize: realTokenize },
+        './validation': { tokenize: mockTokenize },
         './navigation': {
             getWorkspaceMetadata: sinon.stub().returns(meta)
         }

@@ -66,9 +66,9 @@ function findEnclosingSExpression(document, position) {
 
 function formatSExpression(text) {
     const config = vscode.workspace.getConfiguration('sumo');
-    const indentSize = config.get('formatIndentSize') || 2;
+    const indentSize = config.get('general.formatIndentSize') || 2;
 
-    const tokens = tokenize(text);
+    const tokens = tokenize({text}, []);
     if (tokens.length === 0) return text;
 
     let result = '';
@@ -88,18 +88,18 @@ function formatSExpression(text) {
             parenStack.push({ indent, type: 'normal' });
             indent++;
 
-            if (nextToken && nextToken.type === 'ATOM' && QUANTIFIERS.includes(nextToken.value)) {
+            if (nextToken && (nextToken.type === 'ATOM' || nextToken.type === 'OPERATOR') && QUANTIFIERS.includes(nextToken.value)) {
                 parenStack[parenStack.length - 1].type = 'quantifier';
             }
         } else if (token.type === 'RPAREN') {
             indent = Math.max(0, indent - 1);
             if (parenStack.length > 0) parenStack.pop();
             result += ')';
-        } else if (token.type === 'ATOM') {
+        } else if (token.type === 'ATOM' || token.type === 'OPERATOR') {
             if (prevToken) {
                 if (prevToken.type === 'LPAREN') {
                     result += token.value;
-                } else if (prevToken.type === 'ATOM' || prevToken.type === 'RPAREN') {
+                } else if (prevToken.type === 'ATOM' || prevToken.type === 'OPERATOR' || prevToken.type === 'RPAREN') {
                     const currentParen = parenStack[parenStack.length - 1];
                     const parentParen = parenStack[parenStack.length - 2];
 
@@ -129,7 +129,7 @@ function getHeadAtPosition(tokens, currentIndex) {
         if (tokens[i].type === 'RPAREN') balance++;
         else if (tokens[i].type === 'LPAREN') {
             if (balance === 0) {
-                if (i + 1 < tokens.length && tokens[i + 1].type === 'ATOM') {
+                if (i + 1 < tokens.length && (tokens[i + 1].type === 'ATOM' || tokens[i + 1].type === 'OPERATOR')) {
                     return tokens[i + 1].value;
                 }
                 return null;
@@ -164,7 +164,7 @@ function formatDocument(document) {
                 else if (text[i] === '"') {
                     i++;
                     while (i < text.length && text[i] !== '"') {
-                        if (text[i] === '') i++;
+                        if (text[i] === '\\') i++;
                         i++;
                     }
                 } else if (text[i] === ';') {

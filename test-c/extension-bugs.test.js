@@ -27,9 +27,9 @@ describe('extension.js - import / wiring checks', function () {
     // -----------------------------------------------------------------------
     // B1: updateFileDefinitions not imported
     // -----------------------------------------------------------------------
-    describe('B1 - updateFileDefinitions is not imported from navigation', function () {
+    describe('B1 (fixed) - updateFileDefinitions is now correctly imported from navigation', function () {
 
-        it('extension.js calls updateFileDefinitions but does not import it', function () {
+        it('extension.js imports and calls updateFileDefinitions', function () {
             const source = fs.readFileSync(EXTENSION_SRC, 'utf-8');
 
             // The function is called
@@ -37,36 +37,19 @@ describe('extension.js - import / wiring checks', function () {
                 'extension.js must call updateFileDefinitions'
             );
 
-            // But it is NOT in the destructured require of ./src/navigation
-            // The import block should contain 'updateFileDefinitions' for it to work.
-            // BUG B1: it imports 'updateDocumentDefinitions' instead.
-            const importBlock = source.match(/require\(['"]\.\/src\/navigation['"]\)([\s\S]*?)(?=\n\n|\nconst |\nlet )/)?.[0] || '';
-
-            // The import destructures updateDocumentDefinitions (the wrong function)
-            expect(source).to.include('updateDocumentDefinitions',
-                'extension.js imports updateDocumentDefinitions from navigation'
-            );
-
-            // BUG: updateFileDefinitions is NOT in the import
-            // (checking the require block specifically)
+            // FIX B1: updateFileDefinitions must now appear in the destructured require
             const requireNavigation = source.match(
                 /const\s*\{([^}]+)\}\s*=\s*require\(['"]\.\/src\/navigation['"]\)/
             );
             expect(requireNavigation).to.not.be.null;
             const importedNames = requireNavigation[1];
-            expect(importedNames).to.not.include('updateFileDefinitions',
-                'BUG B1: updateFileDefinitions is called in extension.js but never imported ' +
-                'from ./src/navigation — the import only has updateDocumentDefinitions'
+            expect(importedNames).to.include('updateFileDefinitions',
+                'FIX B1: updateFileDefinitions should now be imported from ./src/navigation'
             );
         });
 
-        it('navigation.js exports updateFileDefinitions (so the fix is possible)', function () {
+        it('navigation.js exports updateFileDefinitions', function () {
             const navSource = fs.readFileSync(NAVIGATION_SRC, 'utf-8');
-
-            // navigation.js exports it
-            expect(navSource).to.include('updateFileDefinitions',
-                'navigation.js should export updateFileDefinitions'
-            );
 
             const exportsBlock = navSource.match(/module\.exports\s*=\s*\{([\s\S]*?)\}/)?.[1] || '';
             expect(exportsBlock).to.include('updateFileDefinitions',
@@ -74,17 +57,13 @@ describe('extension.js - import / wiring checks', function () {
             );
         });
 
-        it('the validate() closure in extension.js uses the unimported function name', function () {
+        it('the validate() closure in extension.js calls the correctly imported updateFileDefinitions', function () {
             const source = fs.readFileSync(EXTENSION_SRC, 'utf-8');
 
-            // Lines 160-163 define a `validate` closure that calls updateFileDefinitions.
-            // This is the exact location of the bug.
             const validateClosure = source.match(/const validate[\s\S]*?updateFileDefinitions\([^)]*\)/)?.[0];
             expect(validateClosure).to.not.be.null;
-
-            // Confirm the name is updateFileDefinitions, not updateDocumentDefinitions
             expect(validateClosure).to.include('updateFileDefinitions',
-                'validate() calls updateFileDefinitions which is not imported → ReferenceError at runtime'
+                'validate() should call updateFileDefinitions, which is now properly imported'
             );
         });
     });
@@ -100,7 +79,8 @@ describe('extension.js - import / wiring checks', function () {
             );
             const match = source.match(re);
             if (!match) return [];
-            return match[1].split(',').map(n => n.trim()).filter(Boolean);
+            // Strip aliases: `foo: bar` → `foo` (bar is the local alias, foo is the export name)
+            return match[1].split(',').map(n => n.trim().split(':')[0].trim()).filter(Boolean);
         }
 
         it('all navigation imports exist in navigation.js exports', function () {

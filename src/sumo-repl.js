@@ -205,7 +205,7 @@ class SumoReplTerminal {
     validateFormula(formula) {
         const diagnostics = [];
         try {
-            const tokens = tokenize(formula);
+            const tokens = tokenize({text: formula}, diagnostics);
             // Mock document for parse()
             const mockDoc = {
                 getText: () => formula,
@@ -214,7 +214,7 @@ class SumoReplTerminal {
                     return { line: lines.length - 1, character: lines[lines.length - 1].length };
                 }
             };
-            const ast = parse(tokens, mockDoc, diagnostics);
+            const ast = parse(tokens, diagnostics);
             if (ast.length > 0) {
                 const metadata = collectMetadata(ast);
                 ast.forEach(node => validateNode(node, diagnostics, metadata, mockDoc));

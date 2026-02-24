@@ -4,30 +4,66 @@ const { tokenize, TokenList, ParsingError, NodeType } = require('./parser');
 
 let symbolMetadata = {};
 
+/** @type {vscode.DiagnosticCollection|null} */
+let _diagnosticCollection = null;
+
+/**
+ * Set the shared diagnostic collection used by checkErrorsCommand.
+ * Call this from extension.js after creating the collection.
+ * @param {vscode.DiagnosticCollection} collection
+ */
+function setDiagnosticCollection(collection) {
+    _diagnosticCollection = collection;
+}
+
 /**
  * Parse a token list into an AST, converting any ParsingError into a VS Code diagnostic.
  * On a parse error the diagnostic is pushed and an empty array is returned, so callers
  * can always treat the return value as a (possibly empty) AST without further error handling.
  * @param {import('./parser').Token[]} tokens - Token array from tokenize()
- * @param {vscode.TextDocument} document - The source document (used for diagnostic positions)
  * @param {vscode.Diagnostic[]} diagnostics - Accumulator array; parse errors are pushed here
  * @returns {import('./parser').ASTNode[]} Parsed top-level AST nodes
  */
-function parse(tokens, document, diagnostics) {
+function parse(tokens, diagnostics) {
     const list = new TokenList(tokens);
-    try {
-        return list.parse();
-    } catch (e) {
-        if (e instanceof ParsingError) {
-            const pos = new vscode.Position(e.line, e.column);
-            diagnostics.push(new vscode.Diagnostic(
-                new vscode.Range(pos, pos.translate(0, 1)),
-                e.error || e.message,
-                vscode.DiagnosticSeverity.Error
-            ));
-        }
-        return [];
+    const { nodes, errors } = list.parse();
+    for (const e of errors) {
+        const startPos = new vscode.Position(e.line, e.column);
+        let endPos = startPos.translate(0, 1);
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(startPos, endPos),
+            e.error || e.message,
+            vscode.DiagnosticSeverity.Error
+        ));
     }
+    return nodes;
+}
+
+/**
+ * Tokenize a string into a list of tokens, converting any TokenizerErrors into a VS Code diagnostic.
+ * On a tokenize error the diagnostic is pushed and the token array is returned, so callers
+ * can always treat the return value as a list of tokens without further error handling.
+ * @param {{text?: string, file?: string, doc?: vscode.TextDocument}} source - The source document (used for diagnostic positions)
+ * @param {vscode.Diagnostic[]} diagnostics - Accumulator array; parse errors are pushed here
+ * @returns {import('./parser').Token[]} Parsed top-level AST nodes
+ */
+function tokenizeValidation(source, diagnostics) {
+    let {text, doc, path} = source;
+    if (!text && !doc) throw new Error("tokenize must be provided either a text/doc property");
+    if (!text) {
+        text = doc.getText();
+        path = doc.uri.path
+    }
+    const {tokens, errors} = tokenize(text, path);
+    for (const e of errors) {
+        const pos = new vscode.Position(e.line, e.col);
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(pos, pos.translate(0, 1)),
+            e.error || e.message,
+            vscode.DiagnosticSeverity.Error
+        ));
+    }
+    return tokens;
 }
 
 /**
@@ -137,7 +173,7 @@ function collectMetadata(ast) {
                 const relNode  = node.children[1];
                 const posNode  = node.children[2];
                 const typeNode = node.children[3];
-                if (relNode.type === NodeType.ATOM && posNode.type === NodeType.ATOM && typeNode.type === NodeType.ATOM) {
+                if (relNode.type === NodeType.ATOM && (posNode.type === NodeType.ATOM || posNode.type === NodeType.NUMBER) && typeNode.type === NodeType.ATOM) {
                     const rel = relNode.startToken.value;
                     const pos = parseInt(posNode.startToken.value);
                     const type = typeNode.startToken.value;
@@ -218,8 +254,8 @@ function canReachEntity(sym, parentGraph) {
 }
 
 /**
- * BFS from `sym` following only subclass/subrelation links.
- * Returns true if `ancestor` is reachable through the class hierarchy.
+ * BFS from `sym` following subclass, subrelation, and instance links.
+ * Returns true if `ancestor` is reachable through the class/instance hierarchy.
  * @param {string} ancestor
  * @param {string} sym
  * @param {{ [child: string]: {name: string, type: string}[] }} parentGraph
@@ -234,7 +270,7 @@ function isClassAncestor(ancestor, sym, parentGraph) {
         if (visited.has(current)) continue;
         visited.add(current);
         for (const p of (parentGraph[current] || [])) {
-            if (p.type === 'subclass' || p.type === 'subrelation') {
+            if (p.type === 'subclass' || p.type === 'subrelation' || p.type === 'instance') {
                 queue.push(p.name);
             }
         }
@@ -566,11 +602,21 @@ async function checkErrorsCommand() {
     if (!editor) return;
 
     const document = editor.document;
-
     const diagnostics = [];
-    const text = document.getText();
-    const tokens = tokenize(text, document.fileName);
-    const ast = parse(tokens, document, diagnostics);
+
+    const tokens = tokenize({doc: document}, diagnostics);
+    
+    if (_diagnosticCollection) {
+        if (diagnostics.length > 0) {
+            _diagnosticCollection.set(document.uri, diagnostics);
+            vscode.window.showWarningMessage(`Found ${diagnostics.length} issue(s). See Problems panel for details.`);
+            return;
+        } else {
+            _diagnosticCollection.delete(document.uri);
+        }
+    }
+
+    const ast = parse(tokens, diagnostics);
     const metadata = collectMetadata(ast);
 
     ast.forEach(node => validateNode(node, diagnostics, metadata, document));
@@ -580,8 +626,15 @@ async function checkErrorsCommand() {
     // No kbTaxonomy available here — coverage check is file-local only
     validateCoverage(ast, diagnostics, metadata, document);
 
-    const collection = vscode.languages.createDiagnosticCollection('sumo-check');
-    collection.set(document.uri, diagnostics);
+    // Use the shared collection (set via setDiagnosticCollection) — avoids creating
+    // a second "sumo-check" collection alongside the existing "sumo" collection.
+    if (_diagnosticCollection) {
+        if (diagnostics.length > 0) {
+            _diagnosticCollection.set(document.uri, diagnostics);
+        } else {
+            _diagnosticCollection.delete(document.uri);
+        }
+    }
 
     if (diagnostics.length === 0) {
         vscode.window.showInformationMessage('No errors found in the current file.');
@@ -601,7 +654,7 @@ function setSymbolMetadata(meta) {
 }
 
 module.exports = {
-    tokenize,
+    tokenize: tokenizeValidation,
     parse,
     collectMetadata,
     validateNode,
@@ -611,6 +664,7 @@ module.exports = {
     validateRelationUsage,
     validateCoverage,
     checkErrorsCommand,
+    setDiagnosticCollection,
     getSymbolMetadata,
     setSymbolMetadata
 };

@@ -175,13 +175,16 @@ describe('kb-management.js', function () {
     // -----------------------------------------------------------------------
     describe('B2 - addFileToKBCommand: const destPath reassigned in while loop', function () {
 
-        it('confirms the source uses `const destPath` in a loop that reassigns it', function () {
+        it('B2 (fixed) - source now uses `let destPath` in the copy loop', function () {
             const source = fs.readFileSync(
                 path.join(__dirname, '../src/kb-management.js'), 'utf-8'
             );
-            // BUG B2: the source declares `const destPath` and then reassigns it
-            expect(source).to.match(/const\s+destPath\s*=/,
-                'BUG B2: source should use `let destPath` not `const destPath` in the copy loop'
+            // FIX B2: must use `let` so the reassignment inside the while loop is valid
+            expect(source).to.match(/let\s+destPath\s*=/,
+                'FIX B2: source should use `let destPath` (not `const`) in the copy loop'
+            );
+            expect(source).to.not.match(/const\s+destPath\s*=/,
+                'FIX B2: `const destPath` should no longer appear in the source'
             );
         });
 
@@ -206,10 +209,10 @@ describe('kb-management.js', function () {
                 })
             });
 
-            // Override getSigmaRuntime in this invocation
-            // We can't easily do this after proxyquire, so we test via source analysis
-            // The source analysis test above captures the bug; here we document the expected fix.
-            expect(true).to.be.true; // placeholder for when B2 is fixed
+            // B2 is now fixed (let destPath), so the loop no longer throws TypeError.
+            // The test above verifies the source-level fix; this is a placeholder
+            // for an integration test that would require a more complete runtime mock.
+            expect(true).to.be.true;
         });
 
         it('addFileToKBCommand returns early when no node is provided', async function () {

@@ -43,6 +43,13 @@ function provideCompletionItems(document, position, token, context) {
     return items;
 }
 
+/**
+ * Populate the signature of an expression based on its other relations
+ * @param {vscode.TextDocument} document 
+ * @param {number} position 
+ * @param {Token} token 
+ * @returns 
+ */
 function provideSignatureHelp(document, position, token) {
     const text = document.getText();
     const offset = document.offsetAt(position);
@@ -63,7 +70,7 @@ function provideSignatureHelp(document, position, token) {
     if (start === -1) return null;
     
     const rangeText = text.substring(start, offset);
-    const tokens = tokenize(rangeText);
+    const tokens = tokenize({text: rangeText, file: document.uri.path}, []);
     
     if (tokens.length < 2) return null;
     if (tokens[0].type !== 'LPAREN') return null;

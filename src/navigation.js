@@ -3,9 +3,10 @@ const { DEFINING_RELATIONS } = require('./const');
 const { findConfigXml, parseConfigXml } = require('./sigma/config');
 const fs = require('fs');
 const path = require('path');
-const { TokenList, ASTNode, tokenize, NodeType } = require('./parser');
+const { TokenList, ASTNode, NodeType } = require('./parser');
 const {
     parse,
+    tokenize,
     collectMetadata,
     validateNode,
     validateVariables,
@@ -25,6 +26,9 @@ let workspaceDefinitions = {}; // symbol -> [{file, line, type, context}]
 
 /** @type {{[fsPath: string]: any}} */
 let fileMetadataCache = {};
+
+/** @type {{[fsPath: string]: {relations: any[], docs: any[]}}} */
+let taxonomyCache = {};
 
 /** @type {any} */
 let workspaceMetadataCache = null;
@@ -132,13 +136,14 @@ async function searchSymbolCommand() {
 
     const files = await getKBFiles();
     const matches = [];
+    let diagnostics = [];
 
     for (const file of files) {
         const doc = await vscode.workspace.openTextDocument(file);
         const text = doc.getText();
 
-        const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&');
-        const fastRegex = new RegExp(`\b${escapedSymbol}\b`);
+        const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const fastRegex = new RegExp(`\\b${escapedSymbol}\\b`);
         if (!fastRegex.test(text)) continue;
 
         // Use cached AST from the last updateFileDefinitions call if available,
@@ -146,7 +151,8 @@ async function searchSymbolCommand() {
         let ast = currentKB ? parsedNodes[currentKB]?.[file.fsPath] : null;
         if (!ast) {
             try {
-                ast = new TokenList(tokenize(text, file.fsPath)).parse();
+                const tokens = tokenize({ text, path: file.fsPath}, diagnostics);
+                ast = parse(tokens, diagnostics);
             } catch {
                 ast = [];
             }
@@ -264,7 +270,7 @@ async function findDefinitions(symbol) {
 
         for (const rel of DEFINING_RELATIONS) {
             const pattern = new RegExp(
-                `\(\s*${rel}\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&')})\s`,
+                `\\(\\s*${rel}\\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s`,
                 'g'
             );
 
@@ -288,7 +294,7 @@ async function findDefinitions(symbol) {
         }
 
         const subclassPattern = new RegExp(
-            `\(\s*subclass\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\$&')})\s+([^\s\)]+)`,
+            `\\(\\s*subclass\\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s+([^\\s)]+)`,
             'g'
         );
         let match;
@@ -422,11 +428,13 @@ function updateFileDefinitions(document, kb = undefined) {
     // --- Parse and validate in one pass ---
     const diagnostics = [];
     try {
-        const tokens = tokenize(text, fsPath);
+        // tokenize() from validation.js wraps the tokenize provided by parser and
+        // converts any ParsingErrors into a diagnostic, only returning the list of tokens
+        const tokens = tokenize({text, path: fsPath}, diagnostics);
 
         // parse() from validation.js wraps TokenList and converts any ParsingError
         // into a diagnostic, returning [] on failure rather than throwing.
-        const ast = parse(tokens, document, diagnostics);
+        const ast = parse(tokens, diagnostics);
         parsedNodes[kb][fsPath] = ast;
 
         if (ast.length > 0) {
@@ -444,7 +452,7 @@ function updateFileDefinitions(document, kb = undefined) {
             validateCoverage(ast, diagnostics, metadata, document, getWorkspaceTaxonomy());
         }
     } catch (e) {
-        // Unexpected error (e.g. TokenizerError from a malformed token).
+        // Unexpected error
         // Add a best-effort diagnostic and log for debugging.
         // console.error(`Error processing ${fsPath}:`, e);
         const line = e.line !== undefined ? e.line : 0;
@@ -475,7 +483,7 @@ function updateFileDefinitions(document, kb = undefined) {
     while ((match = regex.exec(text)) !== null) {
         relations.push({ type: match[1], child: match[2], parent: match[3] });
     }
-    const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\\]|\[\s\S])*)"/g;
+    const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\\]|\\.)*)"/g;
     let docMatch;
     while ((docMatch = docRegex.exec(text)) !== null) {
         let docStr = docMatch[3];
@@ -577,7 +585,7 @@ function updateDocumentDefinitions(document, kb = undefined) {
 
     for (const rel of DEFINING_RELATIONS) {
         const pattern = new RegExp(
-            `\(\s*${rel}\s+([^?\s\)][^\s\)]*)\s`,
+            `\\(\\s*${rel}\\s+([^?\\s)][^\\s)]*)\\s`,
             'g'
         );
 

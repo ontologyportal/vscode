@@ -32,8 +32,8 @@ function loadValidation(configValues) {
 
 // Convenience: parse KIF text to AST
 function parseKIF(text) {
-    const tokens = realParser.tokenize(text, 'test.kif');
-    return new realParser.TokenList(tokens).parse();
+    const { tokens } = realParser.tokenize(text, 'test.kif');
+    return new realParser.TokenList(tokens).parse().nodes;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,20 +46,18 @@ describe('validation.js', function () {
 
         it('returns AST for valid KIF', function () {
             const { mod } = loadValidation();
-            const doc = createMockDocument('(instance Foo Bar)');
-            const tokens = realParser.tokenize('(instance Foo Bar)', 'test.kif');
+            const { tokens } = realParser.tokenize('(instance Foo Bar)', 'test.kif');
             const diags = [];
-            const ast = mod.parse(tokens, doc, diags);
+            const ast = mod.parse(tokens, diags);
             expect(ast).to.have.lengthOf(1);
             expect(diags).to.have.lengthOf(0);
         });
 
         it('pushes a diagnostic and returns [] on parse error', function () {
             const { mod } = loadValidation();
-            const doc = createMockDocument('(instance Foo');
-            const tokens = realParser.tokenize('(instance Foo', 'test.kif');
+            const { tokens } = realParser.tokenize('(instance Foo', 'test.kif');
             const diags = [];
-            const ast = mod.parse(tokens, doc, diags);
+            const ast = mod.parse(tokens, diags);
             expect(ast).to.deep.equal([]);
             expect(diags).to.have.lengthOf(1);
             expect(diags[0].severity).to.equal(0); // Error
@@ -69,32 +67,26 @@ describe('validation.js', function () {
     // -----------------------------------------------------------------------
     describe('collectMetadata()', function () {
 
-        it('B10 - does NOT collect domain declarations because position arg is NUMBER not ATOM', function () {
+        it('B10 (fixed) - collects domain declarations for numeric position args', function () {
             const { mod } = loadValidation();
-            // BUG B10: collectMetadata checks `posNode.type === NodeType.ATOM` for the
-            // argument position (e.g. `1` in `(domain knows 1 Agent)`).  However the
-            // parser assigns NodeType.NUMBER to integer literals, so the check always
-            // fails and no domain metadata is ever collected.
-            // The fix is to accept NodeType.NUMBER in addition to NodeType.ATOM for
-            // the argument-position check.
+            // FIX B10: collectMetadata now accepts NodeType.NUMBER for the argument
+            // position (e.g. `1` in `(domain knows 1 Agent)`), so domain metadata
+            // is correctly collected for all numeric positions.
             const ast = parseKIF('(domain knows 1 Agent)');
             const meta = mod.collectMetadata(ast);
-            // BUG: because of B10, `knows` is not added to metadata at all
             const knownDomain = meta.knows && meta.knows.domains && meta.knows.domains[1];
-            expect(knownDomain).to.be.undefined;
+            expect(knownDomain).to.equal('Agent',
+                'FIX B10: domain metadata should now be collected for numeric arg positions'
+            );
         });
 
-        it('would collect domain declarations after B10 is fixed', function () {
-            // This test documents the expected behaviour once B10 is fixed.
-            // After the fix, domain metadata should be populated for numeric arg positions.
+        it('B10 (fixed) - domain metadata is populated for numeric positions', function () {
             const { mod } = loadValidation();
             const ast = parseKIF('(domain knows 1 Agent)');
             const meta = mod.collectMetadata(ast);
-            // Currently returns undefined (B10); after fix should return 'Agent'
             const knownDomain = meta.knows && meta.knows.domains && meta.knows.domains[1];
-            // Document expected value (currently broken):
-            expect(knownDomain).to.equal(undefined, // change to 'Agent' when B10 is fixed
-                'BUG B10: domain metadata not collected because position arg is NUMBER not ATOM'
+            expect(knownDomain).to.equal('Agent',
+                'FIX B10: domain metadata should be collected once NUMBER type is accepted'
             );
         });
 
@@ -151,18 +143,17 @@ describe('validation.js', function () {
             expect(meta.Cat.defNode).to.not.be.null;
         });
 
-        it('B10 - does NOT collect multiple domains due to NUMBER type check failure', function () {
+        it('B10 (fixed) - collects all domain positions for a relation with multiple domain statements', function () {
             const { mod } = loadValidation();
-            // BUG B10 (same root cause as above): numeric positions are NUMBER type,
-            // not ATOM, so no domain metadata is collected for any domain statement.
+            // FIX B10: numeric positions are now accepted (NUMBER type), so all domain
+            // declarations for a relation are correctly collected.
             const kif = '(domain knows 1 Agent)\n(domain knows 2 Entity)';
             const ast = parseKIF(kif);
             const meta = mod.collectMetadata(ast);
-            // `knows` should have been added with two domain entries after fixing B10
             const hasDomain1 = meta.knows && meta.knows.domains && meta.knows.domains[1];
             const hasDomain2 = meta.knows && meta.knows.domains && meta.knows.domains[2];
-            expect(hasDomain1).to.be.undefined;
-            expect(hasDomain2).to.be.undefined;
+            expect(hasDomain1).to.equal('Agent');
+            expect(hasDomain2).to.equal('Entity');
         });
     });
 
@@ -244,20 +235,18 @@ describe('validation.js', function () {
     // -----------------------------------------------------------------------
     describe('validateArity()', function () {
 
-        it('B10 - arity check cannot fire because domain metadata is never collected', function () {
+        it('B10 (fixed) - arity check now fires when domain metadata is collected', function () {
             const { mod } = loadValidation();
-            // BUG B10: because domain declarations are never collected (position arg is
-            // NUMBER not ATOM), validateArity has no domain information and cannot warn
-            // about an arity violation even when one clearly exists.
+            // FIX B10: domain declarations are now collected for numeric positions,
+            // so validateArity correctly warns about arity violations.
             const kif = '(domain knows 1 Agent)\n(domain knows 2 Entity)\n(knows Alice)';
             const ast = parseKIF(kif);
             const metadata = mod.collectMetadata(ast);
             const doc = createMockDocument(kif);
             const diags = [];
             mod.validateArity(ast, diags, metadata, doc);
-            // BUG: currently zero warnings because metadata.knows.domains is empty
-            // After fixing B10, this should produce a warning about missing 2nd arg
-            expect(diags.some(d => d.message.includes('knows'))).to.be.false;
+            // FIX: warns because `knows` is called with 1 arg but needs at least 2
+            expect(diags.some(d => d.message.includes('knows'))).to.be.true;
         });
 
         it('arity check fires correctly when metadata is manually provided', function () {
@@ -423,6 +412,29 @@ describe('validation.js', function () {
                 }
             };
             mod.validateCoverage(ast, diags, metadata, doc, kbTaxonomy);
+            expect(diags.some(d =>
+                d.message.includes("no 'domain'") && d.severity === 1
+            )).to.be.true;
+        });
+
+        it('recognises Relation ancestry through instance edges in the type hierarchy', function () {
+            const { mod } = loadValidation();
+            // BinaryRelation is linked to Relation via 'instance' rather than 'subclass'.
+            // isClassAncestor must follow instance edges to find Relation.
+            const kif = '(instance likes BinaryRelation)';
+            const ast = parseKIF(kif);
+            const metadata = mod.collectMetadata(ast);
+            const doc = createMockDocument(kif);
+            const diags = [];
+            const kbTaxonomy = {
+                parents: {
+                    likes: [{ name: 'BinaryRelation', type: 'instance' }],
+                    BinaryRelation: [{ name: 'Relation', type: 'instance' }], // instance, not subclass
+                    Relation: [{ name: 'Entity', type: 'subclass' }]
+                }
+            };
+            mod.validateCoverage(ast, diags, metadata, doc, kbTaxonomy);
+            // Should still warn about missing domain (isRelationOrFunction must return true)
             expect(diags.some(d =>
                 d.message.includes("no 'domain'") && d.severity === 1
             )).to.be.true;

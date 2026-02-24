@@ -4,9 +4,7 @@ const vscode = require('vscode');
 const path = require('path');
 
 const { 
-    getSigmaRuntime, 
-    findConfigXml, 
-    isWithinConfiguredKB 
+    getSigmaRuntime,
 } = require('./src/sigma');
 
 const { KBTreeProvider } = require('./src/kb-tree');
@@ -15,9 +13,10 @@ const {
     searchSymbolCommand, 
     goToDefinitionCommand, 
     provideDefinition,
-    updateDocumentDefinitions,
+    updateFileDefinitions,
     getKB,
-    setDiagnosticCollection
+    setDiagnosticCollection,
+    browseInSigmaCommand
 } = require('./src/navigation');
 
 const { showTaxonomyCommand } = require('./src/taxonomy');
@@ -28,8 +27,9 @@ const {
     formatRange 
 } = require('./src/formatting');
 
-const { 
-    checkErrorsCommand
+const {
+    checkErrorsCommand,
+    setDiagnosticCollection: setValidationDiagnosticCollection
 } = require('./src/validation');
 
 const { 
@@ -64,10 +64,11 @@ let kbTreeProvider;
  * @param {vscode.ExtensionContext} context 
  */
 async function activate(context) {
-    // Create diagnostic collector
+    // Create a single diagnostic collector shared by all validation paths
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('sumo');
     context.subscriptions.push(diagnosticCollection);
-    setDiagnosticCollection(diagnosticCollection);
+    setDiagnosticCollection(diagnosticCollection);           // navigation.js
+    setValidationDiagnosticCollection(diagnosticCollection); // validation.js checkErrorsCommand
 
     // Create a new provider to track the knowledge bases on the system
     kbTreeProvider = new KBTreeProvider();
@@ -84,7 +85,7 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('sumo.showTaxonomy', (arg) => showTaxonomyCommand(context, arg)));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.formatAxiom', formatAxiomCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.goToDefinition', goToDefinitionCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('sumo.browseInSigma', require('./src/navigation').browseInSigmaCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.browseInSigma', browseInSigmaCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.checkErrors', checkErrorsCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.queryProver', queryProverCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.runProverOnScope', runProverOnScopeCommand));
@@ -203,6 +204,8 @@ async function activate(context) {
             }
         }, ' ', '(')
     );
+
+    openKnowledgeBaseCommand();
 }
 
 /**
