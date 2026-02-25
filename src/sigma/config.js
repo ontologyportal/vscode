@@ -337,10 +337,10 @@ async function addFileToConfig(kbName, filename) {
 /**
  * Remove a constituent file from a KB entry in config.xml.
  * @param {string} kbName - Name of the knowledge base (used for error messages)
- * @param {string} filename - The exact filename attribute value to remove
+ * @param {string} filePath - The file to look for to remove
  * @returns {Promise<void>}
  */
-async function removeFileFromConfig(kbName, filename) {
+async function removeFileFromConfig(kbName, filePath) {
     const configPath = await findConfigXml();
     if (!configPath) {
         const action = await vscode.window.showErrorMessage(
@@ -352,19 +352,37 @@ async function removeFileFromConfig(kbName, filename) {
         }
         return;
     }
+    const configParsed = await parseConfigXml(configPath);
+    if (!configParsed) {
+        await vscode.window.showErrorMessage('Could not parse config.xml, its possibly malformed');
+        return;
+    }
+    const kbDir = configParsed.preferences.kbDir;
     const runtime = getSigmaRuntime(); // get runtime
 
     const content = await runtime.readFile(configPath);
 
-    const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const constituentRegex = new RegExp(
-        `[ \\t]*<constituent\\s+filename\\s*=\\s*"${escapedFilename}"\\s*\\/?>[ \\t]*\\n?`,
-        'g'
-    );
-
-    const newContent = content.replace(constituentRegex, '');
-    if (newContent === content) {
-        throw new Error(`Constituent "${filename}" not found in KB "${kbName}" in config.xml`);
+    // First try the filename by itself
+    const rel = path.relative(kbDir, filePath);
+    let filename = (!rel.startsWith('..')) ? rel : filePath;
+    let newContent = '';
+    while (true) {
+        const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const constituentRegex = new RegExp(
+            `[ \\t]*<constituent\\s+filename\\s*=\\s*"${escapedFilename}"\\s*\\/?>[ \\t]*\\n?`,
+            'g'
+        );
+    
+        newContent = content.replace(constituentRegex, '');
+        if (newContent === content) {
+            // Next try the full file path
+            if (filename !== filePath) {
+                filename = filePath;
+                continue;
+            }
+            throw new Error(`Constituent "${filename}" not found in KB "${kbName}" in config.xml`);
+        }
+        break;
     }
 
     await runtime.writeFile(configPath, newContent);

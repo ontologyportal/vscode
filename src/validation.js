@@ -90,9 +90,9 @@ function nodeRange(node, document) {
  *       → marks X as defined in this file; records Y as a direct parent class
  *   - (instance X Y)
  *       → marks X as defined in this file; records Y as a direct type
- *   - (domain <relation> <pos> <type>)
+ *   - (domain <relation> <pos> <type>) / (domainSubclass <relation> <pos> <type>)
  *       → arity/type constraint for argument <pos> of <relation>
- *   - (range <function> <type>)
+ *   - (range <function> <type>) / (rangeSubclass <function> <type>)
  *       → records that <function> has a range declaration
  *   - (documentation <sym> <lang> <doc>)
  *       → human-readable description; preferred language from 'sumo.language' setting
@@ -169,7 +169,8 @@ function collectMetadata(ast) {
 
             // --- Domain declaration ---
             // (domain <relation> <argPos> <type>)
-            if (op === 'domain' && node.children.length >= 4) {
+            // (domainSubclass <relation> <argPos> <type>)  — treated identically for arity/type-hint purposes
+            if ((op === 'domain' || op === 'domainSubclass') && node.children.length >= 4) {
                 const relNode  = node.children[1];
                 const posNode  = node.children[2];
                 const typeNode = node.children[3];
@@ -186,7 +187,8 @@ function collectMetadata(ast) {
 
             // --- Range declaration ---
             // (range <function> <type>)
-            if (op === 'range' && node.children.length >= 3) {
+            // (rangeSubclass <function> <type>)  — treated identically for Function coverage check
+            if ((op === 'range' || op === 'rangeSubclass') && node.children.length >= 3) {
                 const fnNode = node.children[1];
                 if (fnNode.type === NodeType.ATOM) {
                     entry(fnNode.startToken.value).hasRange = true;
@@ -455,7 +457,9 @@ function validateVariables(ast, diagnostics) {
 
 /**
  * Validate that each relation is called with at least as many arguments as
- * the highest argument position declared in a 'domain' statement.
+ * the highest argument position declared in a 'domain' or 'domainSubclass' statement.
+ * A row variable (@ROW) in the argument list is treated as filling all remaining
+ * argument positions, so no arity warning is emitted when one is present.
  * Requires metadata collected by collectMetadata().
  * @param {import('./parser').ASTNode[]} ast
  * @param {vscode.Diagnostic[]} diagnostics
@@ -472,7 +476,11 @@ function validateArity(ast, diagnostics, metadata, document) {
                 const maxArg = Math.max(...Object.keys(domains).map(k => parseInt(k)));
                 const actualArgs = node.children.length - 1;
 
-                if (actualArgs < maxArg) {
+                // A row variable (@ROW) expands to fill all remaining argument slots —
+                // suppress the arity warning when any argument is a row variable.
+                const hasRowVar = node.children.slice(1).some(c => c.type === NodeType.ROW_VARIABLE);
+
+                if (!hasRowVar && actualArgs < maxArg) {
                     diagnostics.push(new vscode.Diagnostic(
                         nodeRange(node, document),
                         `Relation '${head.startToken.value}' expects at least ${maxArg} arguments, but got ${actualArgs}.`,

@@ -1,9 +1,5 @@
 /**
- * Tests for src/validation.js
- *
- * Tests the pure-logic functions (collectMetadata, validate*, parse) which are
- * designed to work on AST nodes.  VS Code types (Diagnostic, Range, etc.) are
- * injected via proxyquire so no real vscode extension host is needed.
+ * Tests for src/validation.js (non-bug tests)
  */
 
 'use strict';
@@ -67,29 +63,6 @@ describe('validation.js', function () {
     // -----------------------------------------------------------------------
     describe('collectMetadata()', function () {
 
-        it('B10 (fixed) - collects domain declarations for numeric position args', function () {
-            const { mod } = loadValidation();
-            // FIX B10: collectMetadata now accepts NodeType.NUMBER for the argument
-            // position (e.g. `1` in `(domain knows 1 Agent)`), so domain metadata
-            // is correctly collected for all numeric positions.
-            const ast = parseKIF('(domain knows 1 Agent)');
-            const meta = mod.collectMetadata(ast);
-            const knownDomain = meta.knows && meta.knows.domains && meta.knows.domains[1];
-            expect(knownDomain).to.equal('Agent',
-                'FIX B10: domain metadata should now be collected for numeric arg positions'
-            );
-        });
-
-        it('B10 (fixed) - domain metadata is populated for numeric positions', function () {
-            const { mod } = loadValidation();
-            const ast = parseKIF('(domain knows 1 Agent)');
-            const meta = mod.collectMetadata(ast);
-            const knownDomain = meta.knows && meta.knows.domains && meta.knows.domains[1];
-            expect(knownDomain).to.equal('Agent',
-                'FIX B10: domain metadata should be collected once NUMBER type is accepted'
-            );
-        });
-
         it('collects subclass relationships', function () {
             const { mod } = loadValidation();
             const ast = parseKIF('(subclass Human Primate)');
@@ -143,17 +116,29 @@ describe('validation.js', function () {
             expect(meta.Cat.defNode).to.not.be.null;
         });
 
-        it('B10 (fixed) - collects all domain positions for a relation with multiple domain statements', function () {
+        it('collects domainSubclass as a domain declaration', function () {
             const { mod } = loadValidation();
-            // FIX B10: numeric positions are now accepted (NUMBER type), so all domain
-            // declarations for a relation are correctly collected.
-            const kif = '(domain knows 1 Agent)\n(domain knows 2 Entity)';
+            const ast = parseKIF('(domainSubclass myRel 1 Agent)');
+            const meta = mod.collectMetadata(ast);
+            expect(meta.myRel).to.exist;
+            expect(meta.myRel.domains[1]).to.equal('Agent');
+        });
+
+        it('treats domainSubclass and domain declarations for the same relation uniformly', function () {
+            const { mod } = loadValidation();
+            const kif = '(domain knows 1 Agent)\n(domainSubclass knows 2 Entity)';
             const ast = parseKIF(kif);
             const meta = mod.collectMetadata(ast);
-            const hasDomain1 = meta.knows && meta.knows.domains && meta.knows.domains[1];
-            const hasDomain2 = meta.knows && meta.knows.domains && meta.knows.domains[2];
-            expect(hasDomain1).to.equal('Agent');
-            expect(hasDomain2).to.equal('Entity');
+            expect(meta.knows.domains[1]).to.equal('Agent');
+            expect(meta.knows.domains[2]).to.equal('Entity');
+        });
+
+        it('collects hasRange for rangeSubclass declarations', function () {
+            const { mod } = loadValidation();
+            const ast = parseKIF('(rangeSubclass myFn Number)');
+            const meta = mod.collectMetadata(ast);
+            expect(meta.myFn).to.exist;
+            expect(meta.myFn.hasRange).to.be.true;
         });
     });
 
@@ -235,20 +220,6 @@ describe('validation.js', function () {
     // -----------------------------------------------------------------------
     describe('validateArity()', function () {
 
-        it('B10 (fixed) - arity check now fires when domain metadata is collected', function () {
-            const { mod } = loadValidation();
-            // FIX B10: domain declarations are now collected for numeric positions,
-            // so validateArity correctly warns about arity violations.
-            const kif = '(domain knows 1 Agent)\n(domain knows 2 Entity)\n(knows Alice)';
-            const ast = parseKIF(kif);
-            const metadata = mod.collectMetadata(ast);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            mod.validateArity(ast, diags, metadata, doc);
-            // FIX: warns because `knows` is called with 1 arg but needs at least 2
-            expect(diags.some(d => d.message.includes('knows'))).to.be.true;
-        });
-
         it('arity check fires correctly when metadata is manually provided', function () {
             const { mod } = loadValidation();
             // Manually construct metadata with correct domain info (simulating post-B10-fix)
@@ -273,6 +244,29 @@ describe('validation.js', function () {
             const diags = [];
             mod.validateArity(ast, diags, metadata, doc);
             expect(diags).to.have.lengthOf(0);
+        });
+
+        it('does not warn when a row variable fills remaining argument slots', function () {
+            const { mod } = loadValidation();
+            // (check ?VAR @ROW) — check expects 3 args but @ROW covers the rest
+            const kif = '(domain check 1 Agent)\n(domain check 2 Entity)\n(domain check 3 Entity)\n(check ?VAR @ROW)';
+            const ast = parseKIF(kif);
+            const metadata = mod.collectMetadata(ast);
+            const doc = createMockDocument(kif);
+            const diags = [];
+            mod.validateArity(ast, diags, metadata, doc);
+            expect(diags.filter(d => d.message.includes('check'))).to.have.lengthOf(0);
+        });
+
+        it('still warns when arity is underfulfilled and no row variable is present', function () {
+            const { mod } = loadValidation();
+            const kif = '(domain check 1 Agent)\n(domain check 2 Entity)\n(domain check 3 Entity)\n(check ?VAR)';
+            const ast = parseKIF(kif);
+            const metadata = mod.collectMetadata(ast);
+            const doc = createMockDocument(kif);
+            const diags = [];
+            mod.validateArity(ast, diags, metadata, doc);
+            expect(diags.some(d => d.message.includes('check'))).to.be.true;
         });
     });
 
@@ -464,6 +458,45 @@ describe('validation.js', function () {
         it('does not warn about range when range is declared', function () {
             const { mod } = loadValidation();
             const kif = '(instance myFn UnaryFunction)\n(domain myFn 1 Entity)\n(range myFn Integer)';
+            const ast = parseKIF(kif);
+            const metadata = mod.collectMetadata(ast);
+            const doc = createMockDocument(kif);
+            const diags = [];
+            const kbTaxonomy = {
+                parents: {
+                    myFn: [{ name: 'UnaryFunction', type: 'instance' }],
+                    UnaryFunction: [{ name: 'Function', type: 'subclass' }],
+                    Function: [{ name: 'Relation', type: 'subclass' }],
+                    Relation: [{ name: 'Entity', type: 'subclass' }]
+                }
+            };
+            mod.validateCoverage(ast, diags, metadata, doc, kbTaxonomy);
+            expect(diags.filter(d => d.message.includes("no 'range'"))).to.have.lengthOf(0);
+        });
+
+        it('does not warn about domain when only domainSubclass is declared', function () {
+            const { mod } = loadValidation();
+            // domainSubclass should satisfy the "has no domain" check just like domain
+            const kif = '(instance likes BinaryRelation)\n(domainSubclass likes 1 Agent)\n(domainSubclass likes 2 Entity)';
+            const ast = parseKIF(kif);
+            const metadata = mod.collectMetadata(ast);
+            const doc = createMockDocument(kif);
+            const diags = [];
+            const kbTaxonomy = {
+                parents: {
+                    likes: [{ name: 'BinaryRelation', type: 'instance' }],
+                    BinaryRelation: [{ name: 'Relation', type: 'subclass' }],
+                    Relation: [{ name: 'Entity', type: 'subclass' }]
+                }
+            };
+            mod.validateCoverage(ast, diags, metadata, doc, kbTaxonomy);
+            expect(diags.filter(d => d.message.includes("no 'domain'"))).to.have.lengthOf(0);
+        });
+
+        it('does not warn about range when only rangeSubclass is declared', function () {
+            const { mod } = loadValidation();
+            // rangeSubclass should satisfy the Function range check just like range
+            const kif = '(instance myFn UnaryFunction)\n(domain myFn 1 Entity)\n(rangeSubclass myFn Number)';
             const ast = parseKIF(kif);
             const metadata = mod.collectMetadata(ast);
             const doc = createMockDocument(kif);

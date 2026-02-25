@@ -74,8 +74,6 @@ async function activate(context) {
     kbTreeProvider = new KBTreeProvider();
     setKBTreeProvider(kbTreeProvider);
 
-    await getSigmaRuntime().initialize(context);
-
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('sumo.kbExplorer', kbTreeProvider)
     );
@@ -101,9 +99,6 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(updateActiveEditorContext)
     );
-
-    // Set initial state
-    updateActiveEditorContext(vscode.window.activeTextEditor);
 
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
         if (event.affectsConfiguration("sumo.sigma.runtime")) {
@@ -133,8 +128,6 @@ async function activate(context) {
         vscode.workspace.onDidChangeWorkspaceFolders(updateKBStatusBar),
         vscode.window.onDidChangeActiveTextEditor(updateKBStatusBar)
     );
-
-    updateKBStatusBar();
 
     context.subscriptions.push(
         vscode.languages.registerDefinitionProvider('suo-kif', {
@@ -205,7 +198,27 @@ async function activate(context) {
         }, ' ', '(')
     );
 
-    openKnowledgeBaseCommand();
+    await openKnowledgeBaseCommand();
+
+    // Set initial state
+    updateActiveEditorContext(vscode.window.activeTextEditor);
+
+    // Update the status bar
+    updateKBStatusBar();
+
+    // Start Sigma instance
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: `Starting Sigma...`,
+        cancellable: false
+    }, async (progress) => {
+        try {
+            await getSigmaRuntime().initialize(context);
+            vscode.window.showInformationMessage('Successfully started Sigma runtime');
+        } catch (e) {
+            vscode.window.showErrorMessage('Failed to start Sigma runtime');
+        }
+    });
 }
 
 /**

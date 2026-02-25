@@ -366,28 +366,87 @@ async function browseInSigmaCommand() {
 }
 
 /**
- * Perfom full preparsing of the files in all the KBs and their constituents,
- *  then compile the definitions from the AST nodes
+ * Extract and cache the taxonomy relations (subclass/instance/etc.) and
+ * documentation entries for a single document using regex, without parsing
+ * or validating.  This is the first-pass step in buildWorkspaceDefinitions
+ * so that the complete KB-wide taxonomy is available before any file is
+ * validated.
+ * @param {vscode.TextDocument} document
+ */
+function buildTaxonomyEntry(document) {
+    const fsPath = document.uri.fsPath;
+    const text = document.getText();
+
+    const relations = [];
+    const regex = /\(\s*(subclass|subrelation|instance|subAttribute)\s+([^?\s\)][^\s\)]*)\s+([^?\s\)][^\s\)]*)/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        relations.push({ type: match[1], child: match[2], parent: match[3] });
+    }
+
+    const docs = [];
+    const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\\]|\\.)*)"/g;
+    let docMatch;
+    while ((docMatch = docRegex.exec(text)) !== null) {
+        let docStr = docMatch[3];
+        docStr = docStr.replace(/"/g, '"');
+        docs.push({ symbol: docMatch[1], lang: docMatch[2], text: docStr });
+    }
+
+    taxonomyCache[fsPath] = { relations, docs };
+}
+
+/**
+ * Perform full preparsing of the files in all the KBs and their constituents,
+ * then compile the definitions from the AST nodes.
+ *
+ * Uses a two-pass approach so that entity-root / coverage checks always see
+ * the complete KB-wide taxonomy:
+ *
+ *   Pass 1 — taxonomy-only: extract subclass/instance/etc. relations and
+ *             documentation strings from every constituent file via regex.
+ *             No parsing or validation happens yet.
+ *
+ *   Pass 2 — full process: call updateFileDefinitions for every file.
+ *             getWorkspaceTaxonomy() now returns the complete taxonomy, so
+ *             coverage checks are not affected by file processing order.
  */
 async function buildWorkspaceDefinitions() {
-    const kbs = await getKBs(); // Get all the KBs
+    const kbs = await getKBs();
+
+    // Reset all caches — including fileMetadataCache so that metadata from
+    // files removed from a KB does not persist in getWorkspaceMetadata().
     parsedNodes = {};
     workspaceDefinitions = {};
     taxonomyCache = {};
-    for (const kb of kbs) { // iterate through the KBs
-        const files = await getKBFiles(kb); // get all the KB files
+    fileMetadataCache = {};
+    workspaceMetadataCache = null;
+
+    const fileDocs = []; // collected for pass 2
+
+    // Pass 1: build taxonomy for ALL files before any validation runs.
+    for (const kb of kbs) {
+        const files = await getKBFiles(kb);
         parsedNodes[kb] = {};
         workspaceDefinitions[kb] = {};
         for (const file of files) {
-            if (diagnosticCollection) {
-                diagnosticCollection.delete(file);
-            }
+            if (diagnosticCollection) diagnosticCollection.delete(file);
             try {
                 const doc = await vscode.workspace.openTextDocument(file);
-                updateFileDefinitions(doc, kb);
+                buildTaxonomyEntry(doc);
+                fileDocs.push({ doc, kb });
             } catch (e) {
-                // console.error(`Error parsing ${file.fsPath}:`, e);
+                // console.error(`Error opening ${file.fsPath}:`, e);
             }
+        }
+    }
+
+    // Pass 2: parse and validate every file against the now-complete taxonomy.
+    for (const { doc, kb } of fileDocs) {
+        try {
+            updateFileDefinitions(doc, kb);
+        } catch (e) {
+            // console.error(`Error processing ${doc.uri.fsPath}:`, e);
         }
     }
 }
@@ -424,6 +483,26 @@ function updateFileDefinitions(document, kb = undefined) {
 
     if (!parsedNodes[kb]) parsedNodes[kb] = {};
     if (!workspaceDefinitions[kb]) workspaceDefinitions[kb] = {};
+
+    // --- Taxonomy cache (relations and docs for the tree view) ---
+    // Built BEFORE validation so that getWorkspaceTaxonomy() includes this file's
+    // own edges when validateCoverage runs.  Extracted via regex rather than the
+    // AST so this works even when the file has parse errors.
+    const relations = [];
+    const docs = [];
+    const regex = /\(\s*(subclass|subrelation|instance|subAttribute)\s+([^?\s\)][^\s\)]*)\s+([^?\s\)][^\s\)]*)/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        relations.push({ type: match[1], child: match[2], parent: match[3] });
+    }
+    const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\\]|\\.)*)"/g;
+    let docMatch;
+    while ((docMatch = docRegex.exec(text)) !== null) {
+        let docStr = docMatch[3];
+        docStr = docStr.replace(/"/g, '"');
+        docs.push({ symbol: docMatch[1], lang: docMatch[2], text: docStr });
+    }
+    taxonomyCache[fsPath] = { relations, docs };
 
     // --- Parse and validate in one pass ---
     const diagnostics = [];
@@ -472,25 +551,6 @@ function updateFileDefinitions(document, kb = undefined) {
         }
     }
     workspaceMetadataCache = null;
-
-    // --- Taxonomy cache (relations and docs for the tree view) ---
-    // Extracted via regex rather than the AST so this works even when
-    // the file has parse errors and ast is [].
-    const relations = [];
-    const docs = [];
-    const regex = /\(\s*(subclass|subrelation|instance)\s+([^?\s\)][^\s\)]*)\s+([^?\s\)][^\s\)]*)/g;
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-        relations.push({ type: match[1], child: match[2], parent: match[3] });
-    }
-    const docRegex = /\(\s*documentation\s+([^\s\)]+)\s+([^\s\)]+)\s+"((?:[^"\\]|\\.)*)"/g;
-    let docMatch;
-    while ((docMatch = docRegex.exec(text)) !== null) {
-        let docStr = docMatch[3];
-        docStr = docStr.replace(/"/g, '"');
-        docs.push({ symbol: docMatch[1], lang: docMatch[2], text: docStr });
-    }
-    taxonomyCache[fsPath] = { relations, docs };
 
     updateDocumentDefinitions(document, kb);
 }

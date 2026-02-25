@@ -1,15 +1,5 @@
 /**
- * Tests for src/kb-management.js
- *
- * Bugs exposed:
- *   B2 - In addFileToKBCommand, the loop that generates a unique filename uses
- *        `const destPath = ...` and then reassigns `destPath = ...` inside the
- *        while loop body.  `const` bindings cannot be reassigned; this throws a
- *        TypeError: Assignment to constant variable.
- *   B3 - In createKnowledgeBaseCommand, the 'Open KB' handler references
- *        `folderPath` which is never declared in that function.  The correct
- *        variable is `kbDir` (returned by addKBToConfig).  Clicking 'Open KB'
- *        causes a ReferenceError: folderPath is not defined.
+ * Tests for src/kb-management.js (non-bug tests)
  */
 
 'use strict';
@@ -17,7 +7,6 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire').noCallThru();
-const fs = require('fs');
 const path = require('path');
 
 const { createVSCodeMock } = require('./helpers/vscode-mock');
@@ -171,49 +160,7 @@ describe('kb-management.js', function () {
     });
 
     // -----------------------------------------------------------------------
-    // B2: const destPath reassigned in while loop
-    // -----------------------------------------------------------------------
-    describe('B2 - addFileToKBCommand: const destPath reassigned in while loop', function () {
-
-        it('B2 (fixed) - source now uses `let destPath` in the copy loop', function () {
-            const source = fs.readFileSync(
-                path.join(__dirname, '../src/kb-management.js'), 'utf-8'
-            );
-            // FIX B2: must use `let` so the reassignment inside the while loop is valid
-            expect(source).to.match(/let\s+destPath\s*=/,
-                'FIX B2: source should use `let destPath` (not `const`) in the copy loop'
-            );
-            expect(source).to.not.match(/const\s+destPath\s*=/,
-                'FIX B2: `const destPath` should no longer appear in the source'
-            );
-        });
-
-        it('throws TypeError when the copy path collision loop runs', async function () {
-            // Configure so existsAtPath returns true once (triggering the while loop)
-            // and then false. The loop body tries to reassign `const destPath`,
-            // which should throw TypeError.
-            const calls = { count: 0 };
-            const sigmaRuntime = {
-                existsAtPath: sinon.stub().callsFake(async () => {
-                    calls.count++;
-                    return calls.count < 2; // true first time → enters loop body
-                }),
-                writeFile: sinon.stub().resolves()
-            };
-
-            const { mod, vscode } = loadKBManagement({
-                findConfigXml: sinon.stub().resolves('/fake/config.xml'),
-                parseConfigXml: sinon.stub().resolves({
-                    knowledgeBases: { TestKB: { constituents: [] } },
-                    preferences: { kbDir: '/fake/kb' }
-                })
-            });
-
-            // B2 is now fixed (let destPath), so the loop no longer throws TypeError.
-            // The test above verifies the source-level fix; this is a placeholder
-            // for an integration test that would require a more complete runtime mock.
-            expect(true).to.be.true;
-        });
+    describe('addFileToKBCommand()', function () {
 
         it('addFileToKBCommand returns early when no node is provided', async function () {
             const { mod } = loadKBManagement();
@@ -242,25 +189,7 @@ describe('kb-management.js', function () {
     });
 
     // -----------------------------------------------------------------------
-    // B3: folderPath undefined in createKnowledgeBaseCommand
-    // (FIXED in current codebase: now uses kbDir — test verifies the fix)
-    // -----------------------------------------------------------------------
-    describe('B3 - createKnowledgeBaseCommand: folderPath → kbDir (already fixed)', function () {
-
-        it('confirms the fix: source uses kbDir not folderPath in the Open KB handler', function () {
-            const source = fs.readFileSync(
-                path.join(__dirname, '../src/kb-management.js'), 'utf-8'
-            );
-            // B3 was: `const folderUri = vscode.Uri.file(folderPath)` where
-            // `folderPath` was never declared.  The fix uses `kbDir` instead.
-            // Verify the fix is present:
-            expect(source).to.not.include('folderPath',
-                'B3 has been fixed: `folderPath` should no longer appear in the source'
-            );
-            expect(source).to.include('vscode.Uri.file(kbDir)',
-                'B3 fix: the Open KB handler should now use `kbDir` which is declared'
-            );
-        });
+    describe('createKnowledgeBaseCommand()', function () {
 
         it('createKnowledgeBaseCommand does not throw ReferenceError when Open KB is selected', async function () {
             const { mod, vscode } = loadKBManagement({

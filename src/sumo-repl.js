@@ -1,5 +1,6 @@
 const vscode = require('vscode');
-const { ask, tell, getKB } = require('./sigma');
+const { ask, tell } = require('./sigma');
+const { getKB } = require('./navigation');
 const { tokenize, parse, validateNode, validateVariables, collectMetadata } = require('./validation');
 
 /**
@@ -9,6 +10,8 @@ class SumoReplTerminal {
     constructor() {
         this.writeEmitter = new vscode.EventEmitter();
         this.onDidWrite = this.writeEmitter.event;
+        this.closeEmitter = new vscode.EventEmitter();
+        this.onDidClose = this.closeEmitter.event;
         this.lineBuffer = '';
         this.history = [];
         this.historyIndex = -1;
@@ -31,7 +34,9 @@ class SumoReplTerminal {
         this.prompt();
     }
 
-    close() {}
+    close() {
+        this.closeEmitter.fire();
+    }
 
     prompt() {
         const kbPrefix = this.currentKB ? `(${this.currentKB}) ` : '';
@@ -128,6 +133,7 @@ class SumoReplTerminal {
             }
         } catch (e) {
             this.writeEmitter.fire(`\r\nError: ${e.message}\r\n`);
+            console.error(e);
         }
 
         this.prompt();
@@ -240,7 +246,14 @@ function openSumoRepl() {
         name: 'SUMO REPL',
         pty: pty
     });
-    
+
+    const disposable = vscode.window.onDidCloseTerminal(t => {
+        if (t === terminal) {
+            terminal = null;
+            disposable.dispose();
+        }
+    });
+
     terminal.show();
 }
 

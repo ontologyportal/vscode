@@ -184,12 +184,9 @@ async function removeFileFromKBCommand(node) {
     );
     if (confirm !== 'Remove') return;
 
-    const rel = path.relative(kbDir, filePath);
-    const filename = (!rel.startsWith('..')) ? rel : filePath;
-
     try {
         // Actually remove the file
-        await removeFileFromConfig(kbName, filename);
+        await removeFileFromConfig(kbName, filePath);
     } catch (e) {
         vscode.window.showErrorMessage('Failed to remove file: ' + e.message);
         return;

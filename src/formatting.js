@@ -71,6 +71,9 @@ function formatSExpression(text) {
     const tokens = tokenize({text}, []);
     if (tokens.length === 0) return text;
 
+    // All non-paren token types are treated equivalently for spacing/newline decisions.
+    const ATOM_LIKE = new Set(['ATOM', 'OPERATOR', 'VARIABLE', 'ROW_VARIABLE', 'NUMBER', 'STRING']);
+
     let result = '';
     let indent = 0;
     let prevToken = null;
@@ -82,38 +85,55 @@ function formatSExpression(text) {
 
         if (token.type === 'LPAREN') {
             if (prevToken && prevToken.type !== 'LPAREN') {
-                result += '\n' + ' '.repeat(indent * indentSize);
+                // Sigma style: the variable list of a quantifier stays on the same line
+                // as the quantifier keyword — emit a space instead of a newline.
+                // e.g. "(forall (?X ?Y) ...)" not "(forall\n  (?X ?Y) ...)"
+                const prevIsQuantifier = ATOM_LIKE.has(prevToken.type) && QUANTIFIERS.includes(prevToken.value);
+                if (prevIsQuantifier) {
+                    result += ' ';
+                } else {
+                    result += '\n' + ' '.repeat(indent * indentSize);
+                }
             }
             result += '(';
             parenStack.push({ indent, type: 'normal' });
             indent++;
 
-            if (nextToken && (nextToken.type === 'ATOM' || nextToken.type === 'OPERATOR') && QUANTIFIERS.includes(nextToken.value)) {
+            // Mark expressions headed by a quantifier so their body arguments get new lines
+            if (nextToken && ATOM_LIKE.has(nextToken.type) && QUANTIFIERS.includes(nextToken.value)) {
                 parenStack[parenStack.length - 1].type = 'quantifier';
             }
         } else if (token.type === 'RPAREN') {
             indent = Math.max(0, indent - 1);
             if (parenStack.length > 0) parenStack.pop();
             result += ')';
-        } else if (token.type === 'ATOM' || token.type === 'OPERATOR') {
+        } else if (ATOM_LIKE.has(token.type)) {
+            // Reconstruct the literal: STRING tokens need their surrounding quotes restored.
+            const display = token.type === 'STRING' ? `"${token.value}"` : token.value;
+
             if (prevToken) {
                 if (prevToken.type === 'LPAREN') {
-                    result += token.value;
-                } else if (prevToken.type === 'ATOM' || prevToken.type === 'OPERATOR' || prevToken.type === 'RPAREN') {
+                    // Head of an S-expression: immediately follows the opening paren.
+                    result += display;
+                } else if (ATOM_LIKE.has(prevToken.type) || prevToken.type === 'RPAREN') {
                     const currentParen = parenStack[parenStack.length - 1];
-                    const parentParen = parenStack[parenStack.length - 2];
+                    const parentParen  = parenStack[parenStack.length - 2];
 
                     if (parentParen && parentParen.type === 'quantifier' && currentParen) {
-                        result += ' ' + token.value;
+                        // Inside a direct child of a quantifier (variable list or body):
+                        // keep arguments on the same line separated by spaces.
+                        result += ' ' + display;
                     } else if (LOGIC_OPS.includes(getHeadAtPosition(tokens, i)) ||
                                QUANTIFIERS.includes(getHeadAtPosition(tokens, i))) {
-                        result += '\n' + ' '.repeat(indent * indentSize) + token.value;
+                        // Arguments to logic operators / quantifiers each go on their own line.
+                        result += '\n' + ' '.repeat(indent * indentSize) + display;
                     } else {
-                        result += ' ' + token.value;
+                        // Regular relation arguments: inline, separated by a single space.
+                        result += ' ' + display;
                     }
                 }
             } else {
-                result += token.value;
+                result += display;
             }
         }
 
@@ -129,7 +149,8 @@ function getHeadAtPosition(tokens, currentIndex) {
         if (tokens[i].type === 'RPAREN') balance++;
         else if (tokens[i].type === 'LPAREN') {
             if (balance === 0) {
-                if (i + 1 < tokens.length && (tokens[i + 1].type === 'ATOM' || tokens[i + 1].type === 'OPERATOR')) {
+                const ATOM_LIKE = new Set(['ATOM', 'OPERATOR', 'VARIABLE', 'ROW_VARIABLE', 'NUMBER', 'STRING']);
+                if (i + 1 < tokens.length && ATOM_LIKE.has(tokens[i + 1].type)) {
                     return tokens[i + 1].value;
                 }
                 return null;

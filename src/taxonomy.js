@@ -37,13 +37,18 @@ async function showTaxonomyCommand(context, argSymbol) {
             enableScripts: true,
             localResourceRoots: [
                 // The library for the mermaid diagram renderer, allow the webview to access it
-                vscode.Uri.file(path.join(context.extensionPath, 'node_modules', 'mermaid', 'dist'))
+                vscode.Uri.file(path.join(context.extensionPath, 'node_modules', 'mermaid', 'dist')),
+                vscode.Uri.file(path.join(context.extensionPath, 'node_modules', 'svg-pan-zoom', 'dist'))
             ]
         }
     );
 
     const mermaidUri = panel.webview.asWebviewUri(vscode.Uri.file(
         path.join(context.extensionPath, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js')
+    ));
+
+    const svgPanZoomUri = panel.webview.asWebviewUri(vscode.Uri.file(
+        path.join(context.extensionPath, 'node_modules', 'svg-pan-zoom', 'dist', 'svg-pan-zoom.min.js')
     ));
 
     // Keep track of the view changes so the user can go back to it
@@ -72,6 +77,9 @@ async function showTaxonomyCommand(context, argSymbol) {
         );
         panel.webview.html = `<!DOCTYPE html>${html.outerHTML}`;
         
+        // Give the UI a moment to render the loading message
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
         const { parents, children, documentation } = getWorkspaceTaxonomy();
         let doc = (documentation[targetSymbol]) 
             ? documentation[targetSymbol]
@@ -85,7 +93,7 @@ async function showTaxonomyCommand(context, argSymbol) {
             canGoForward: currentIndex < history.length - 1
         };
 
-        panel.webview.html = generateTaxonomyHtml(targetSymbol, parents, children, doc, mermaidUri, panel.webview.cspSource, historyState);
+        panel.webview.html = generateTaxonomyHtml(targetSymbol, parents, children, doc, mermaidUri, svgPanZoomUri, panel.webview.cspSource, historyState);
     };
 
     panel.webview.onDidReceiveMessage(
@@ -118,7 +126,7 @@ async function showTaxonomyCommand(context, argSymbol) {
     updateWebview(symbol);
 }
 
-function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, mermaidUri, cspSource, historyState) {
+function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, mermaidUri, svgPanZoomUri, cspSource, historyState) {
     const { canGoBack, canGoForward } = historyState || { canGoBack: false, canGoForward: false };
     // Build graph data for Mermaid
     const nodes = new Set([symbol]);
@@ -177,8 +185,9 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
             <meta charset="UTF-8">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${cspSource}; style-src 'unsafe-inline';">
             <script src="${mermaidUri}"></script>
+            <script src="${svgPanZoomUri}"></script>
             <style>
-                body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-editor-foreground); background-color: var(--vscode-editor-background); }
+                body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-editor-foreground); background-color: var(--vscode-editor-background); display: flex; flex-direction: column; height: 95vh; }
                 h2 { color: var(--vscode-textLink-foreground); border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 5px; }
                 .nav-buttons { margin-bottom: 15px; display: flex; gap: 10px; }
                 .nav-btn {
@@ -206,7 +215,13 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
                     text-decoration: underline;
                 }
                 .mermaid {
-                    margin-top: 20px;
+                    flex-grow: 1;
+                    overflow: hidden;
+                    border: 1px solid var(--vscode-panel-border);
+                }
+                .mermaid svg {
+                    height: 100%;
+                    width: 100%;
                 }
             </style>
         </head>
@@ -227,7 +242,7 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
                 
                 // Initialize Mermaid
                 const theme = document.body.classList.contains('vscode-dark') ? 'dark' : 'default';
-                mermaid.initialize({ startOnLoad: true, theme: theme });
+                mermaid.initialize({ startOnLoad: false, theme: theme });
 
                 // Global function for documentation links
                 window.openSymbol = (sym) => {
@@ -241,6 +256,39 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
 
                 window.goBack = () => vscode.postMessage({ command: 'goBack' });
                 window.goForward = () => vscode.postMessage({ command: 'goForward' });
+
+                (async () => {
+                    try {
+                        await mermaid.run();
+                        const svgElement = document.querySelector('.mermaid svg');
+                        if (svgElement) {
+                            svgElement.style.width = '100%';
+                            svgElement.style.height = '100%';
+                            svgElement.style.maxWidth = 'none';
+                            
+                            const panZoom = svgPanZoom(svgElement, {
+                                zoomEnabled: true,
+                                controlIconsEnabled: true,
+                                fit: true,
+                                center: true,
+                                minZoom: 0.1
+                            });
+                            
+                            // Force a resize and center to ensure it looks right
+                            panZoom.resize();
+                            panZoom.fit();
+                            panZoom.center();
+                            
+                            window.addEventListener('resize', () => {
+                                panZoom.resize();
+                                panZoom.fit();
+                                panZoom.center();
+                            });
+                        }
+                    } catch (e) {
+                        console.error('Mermaid/PanZoom error:', e);
+                    }
+                })();
             </script>
         </body>
         </html>

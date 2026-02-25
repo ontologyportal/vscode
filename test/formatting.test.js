@@ -1,14 +1,5 @@
 /**
- * Tests for src/formatting.js
- *
- * Bugs exposed:
- *   B4 - formatSExpression reads config key 'formatIndentSize' instead of
- *        'general.formatIndentSize', so the user's indent-size setting is always ignored.
- *   B5 - formatDocument uses `text[i] === ''` to detect backslash escapes inside
- *        string literals, but an empty string can never equal a single character.
- *        The correct check is `text[i] === '\\'`.  As a result, an escaped quote
- *        `\"` inside a documentation string terminates the string scan early,
- *        corrupting subsequent S-expression boundaries.
+ * Tests for src/formatting.js (non-bug tests)
  */
 
 'use strict';
@@ -60,70 +51,72 @@ describe('formatting.js', function () {
 
         it('formats a nested expression with default indent (2 spaces)', function () {
             const { mod } = loadFormatting();
-            // NOTE: the tokenizer does not recognise '=>' as a valid ATOM (starts with '='),
-            // so we use 'and' which is a valid lowercase ATOM.
             const input = '(and (instance Foo Animal) (instance Foo Object))';
             const result = mod.formatSExpression(input);
-            expect(result).to.include('and');
-            expect(result).to.include('instance');
+            // Each nested expression should be indented by 2 spaces
+            expect(result).to.match(/^ {2}\(instance/m);
         });
 
-        it('formats a forall quantifier (VARIABLE tokens are dropped by formatter)', function () {
+        it('preserves VARIABLE tokens in a forall quantifier', function () {
             const { mod } = loadFormatting();
-            // NOTE: variables like ?X are valid — they are tokenized as VARIABLE type.
-            // The formatter only handles ATOM tokens; VARIABLE tokens are silently skipped.
-            // ATOMs that immediately follow a VARIABLE are also dropped (prevToken check).
             const input = '(forall (?X) (instance ?X Foo))';
             const result = mod.formatSExpression(input);
             expect(result).to.include('forall');
             expect(result).to.include('instance');
-            // ?X and the following atom Foo are dropped because the formatter
-            // has no branch for token.type === 'VARIABLE'
-            expect(result).to.not.include('?X');
+            expect(result).to.include('?X');
+            expect(result).to.include('Foo');
         });
-    });
 
-    // -----------------------------------------------------------------------
-    // B4: wrong config key — 'formatIndentSize' vs 'general.formatIndentSize'
-    // -----------------------------------------------------------------------
-    describe('B4 (fixed) - formatSExpression now reads "general.formatIndentSize"', function () {
-
-        it('setting "general.formatIndentSize" changes the indent size', function () {
-            const input = '(and (instance Foo Animal) (and (instance Foo Object) (instance Bar Object)))';
-
-            // With the correct key set to 4, output should use 4-space indent
-            const { mod } = loadFormatting({ 'general.formatIndentSize': 4 });
+        it('keeps the quantifier variable list inline with the quantifier keyword', function () {
+            const { mod } = loadFormatting();
+            // Sigma style: "(forall (?X ?Y) body)" — variable list on same line as forall
+            const input = '(forall (?X ?Y) (instance ?X Foo))';
             const result = mod.formatSExpression(input);
-
-            // With no key set, output should use the 2-space default
-            const { mod: modDefault } = loadFormatting({});
-            const resultDefault = modDefault.formatSExpression(input);
-
-            // FIX B4: the correct key is now read, so 4-space differs from the 2-space default
-            expect(result).to.not.equal(resultDefault,
-                'FIX B4: "general.formatIndentSize": 4 should produce 4-space indentation, ' +
-                'which differs from the default 2-space output'
-            );
-            expect(result).to.match(/    /, 'output should contain 4-space indentation');
+            // The variable list must appear on the same line as "forall"
+            const forallLine = result.split('\n').find(l => l.includes('forall'));
+            expect(forallLine).to.include('(?X ?Y)');
         });
 
-        it('the old wrong key "formatIndentSize" (no prefix) is now ignored', function () {
-            const input = '(and (instance Foo Animal) (and (instance Foo Object) (instance Bar Object)))';
+        it('preserves NUMBER tokens', function () {
+            const { mod } = loadFormatting();
+            const input = '(domain knows 1 Agent)';
+            const result = mod.formatSExpression(input);
+            expect(result).to.include('domain');
+            expect(result).to.include('1');
+            expect(result).to.include('Agent');
+        });
 
-            // Correct key set to 8 → should use 8-space indent
-            const { mod: modCorrectKey } = loadFormatting({ 'general.formatIndentSize': 8 });
-            // Wrong key set to 8 → should now be IGNORED, falls back to default 2 spaces
-            const { mod: modWrongKey } = loadFormatting({ 'formatIndentSize': 8 });
+        it('preserves ROW_VARIABLE tokens', function () {
+            const { mod } = loadFormatting();
+            const input = '(and (instance ?X Foo) (check ?X @ROW))';
+            const result = mod.formatSExpression(input);
+            expect(result).to.include('?X');
+            expect(result).to.include('@ROW');
+        });
 
-            const r1 = modCorrectKey.formatSExpression(input);
-            const r2 = modWrongKey.formatSExpression(input);
+        it('preserves STRING tokens and wraps them in quotes', function () {
+            const { mod } = loadFormatting();
+            const input = '(documentation Foo EnglishLanguage "A human being.")';
+            const result = mod.formatSExpression(input);
+            expect(result).to.include('documentation');
+            expect(result).to.include('"A human being."');
+        });
 
-            // FIX B4: the correct key is honoured (8-space), the wrong key is ignored (2-space)
-            expect(r1).to.not.equal(r2,
-                'FIX B4: correct key "general.formatIndentSize" = 8 gives 8-space indent; ' +
-                'wrong key "formatIndentSize" is ignored and falls back to 2-space default'
-            );
-            expect(r1).to.match(/        /, 'correct-key output should have 8-space indentation');
+        it('formats nested logical operators with each argument on its own line', function () {
+            const { mod } = loadFormatting();
+            const input = '(and (instance Foo Animal) (instance Foo Object))';
+            const result = mod.formatSExpression(input);
+            const lines = result.split('\n');
+            // "and" on first line, each nested (instance ...) on its own line
+            expect(lines[0]).to.include('and');
+            expect(lines.some(l => l.includes('(instance Foo Animal)'))).to.be.true;
+            expect(lines.some(l => l.includes('(instance Foo Object)'))).to.be.true;
+        });
+
+        it('keeps simple ground facts on one line', function () {
+            const { mod } = loadFormatting();
+            const result = mod.formatSExpression('(instance Foo Bar)');
+            expect(result).to.equal('(instance Foo Bar)');
         });
     });
 
@@ -210,37 +203,6 @@ describe('formatting.js', function () {
             const doc = createMockDocument(text);
             const edits = mod.formatDocument(doc);
             expect(edits).to.have.lengthOf(0);
-        });
-
-        // -------------------------------------------------------------------
-        // B5: backslash-escape check in string scanning is broken
-        // -------------------------------------------------------------------
-        it('B5 (fixed) - escape detection now uses backslash instead of empty string', function () {
-            const source = require('fs').readFileSync(
-                require('path').join(__dirname, '../src/formatting.js'), 'utf-8'
-            );
-            // FIX B5: source now uses '\\' (the backslash character) for escape detection
-            expect(source).to.include("text[i] === '\\\\'",
-                'FIX B5: escape-detection check should use backslash "\\\\", not empty string ""'
-            );
-            // And the buggy empty-string form should be gone
-            expect(source).to.not.include("text[i] === ''",
-                'FIX B5: empty string literal "" should no longer appear as the escape check'
-            );
-        });
-
-        it('B5 & B4 (fixed) - correct config key and correct escape check both present', function () {
-            const source = require('fs').readFileSync(
-                require('path').join(__dirname, '../src/formatting.js'), 'utf-8'
-            );
-            // FIX B4: source now reads 'general.formatIndentSize'
-            expect(source).to.include("config.get('general.formatIndentSize')",
-                'FIX B4: source should use correct key "general.formatIndentSize"'
-            );
-            // FIX B5: the escape check is now `text[i] === '\\'`
-            expect(source).to.include("text[i] === '\\\\'",
-                'FIX B5: escape-detection check should use backslash "\\\\"'
-            );
         });
     });
 

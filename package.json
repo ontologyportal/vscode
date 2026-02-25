@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "test": "mocha test/**/*.test.js",
+    "test": "mocha 'test/**/*.test.js' 'test-c/**/*.test.js'",
     "test:watch": "mocha --watch test/**/*.test.js",
     "lint": "node --check extension.js && node --check src/**/*.js",
     "build": "vsce package -o ./dist",
@@ -434,6 +434,7 @@
     "dockerode": "^4.0.9",
     "hyperscript": "^2.0.2",
     "js4j": "^0.1.2",
-    "mermaid": "^11.12.3"
+    "mermaid": "^11.12.3",
+    "svg-pan-zoom": "^3.6.2"
   }
 }

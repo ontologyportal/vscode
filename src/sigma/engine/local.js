@@ -64,10 +64,11 @@ class LocalRuntimeRunner {
         cp.push(path.join(context.extensionPath, "lib", "SigmaBridge.jar"));
         
         try {
-            const { gateway, process: executor, kill } = launchGateway({
+            const { gateway, process: executor, kill } = await launchGateway({
                 classpath: cp.join(path.delimiter),
                 mainClass: "com.articulate.sigma.SigmaBridge",
-                readyPattern: /^SIGMA_READY/g
+                readyPattern: /^SIGMA_READY/g,
+                killConflict: true
             });
             this.gateway = gateway; 
             this.executor = executor;
@@ -75,6 +76,11 @@ class LocalRuntimeRunner {
         } catch (e) {
             throw new Error(`Error trying to start Sigma Java bridge: ${e}`);
         }
+
+        // Get and initialize the manager
+        const KBmanager = await this.gateway.jvm.com.articulate.sigma.KBmanager;
+        let mgr = await KBmanager.getMgr();
+        await mgr.initializeOnce();
 
         this.initialized = true;
     }
@@ -100,6 +106,7 @@ class LocalRuntimeRunner {
      * @returns {string} The file path written
      */
     async writeFile(fileName, kbName, conjecture = null, isQuestion = false) {
+        if (!this.initialized) throw new Error("Cannot utilize local sigma runtime before its initialized");
         const jvm = this.gateway.jvm;
         const gateway = this.gateway;
         
@@ -112,7 +119,6 @@ class LocalRuntimeRunner {
         // Get and initialize the manager
         const KBmanager = await jvm.com.articulate.sigma.KBmanager;
         let mgr = await KBmanager.getMgr();
-        await mgr.initializeOnce();
 
         // Next initialize the converstion object
         const skbtptpkb = await jvm.com.articulate.sigma.trans.SUMOKBtoTPTPKB();
@@ -127,11 +133,12 @@ class LocalRuntimeRunner {
         try {
             const more = await gateway.newArray(jvm.java.lang.String, 0);
             const file = await Paths.get(fileName, more);
-            const openOptions = await gateway.newArray(OpenOption, 0);
+            const openOptions = await gateway.newArray(OpenOption, 1);
             await openOptions.set(0, await gateway.getField(StandardOpenOption, "CREATE"));
             const bufferedWriter = await Files.newBufferedWriter(file, openOptions);
             pw = await jvm.java.io.PrintWriter(bufferedWriter);
         } catch (e) {
+            console.error(e);
             throw new Error(`Error opening ${fileName} to write: ${e}`);
         }
 
@@ -158,6 +165,8 @@ class LocalRuntimeRunner {
      * @returns {Promise<string[]>} - Any errors or status messages
      */
     async tell(kbName, statement) {
+        if (!this.initialized) throw new Error("Cannot utilize local sigma runtime before its initialized");
+        console.log(this);
         const jvm = this.gateway.jvm;
         const KBmanager = await jvm.com.articulate.sigma.KBmanager;
         const mgr = await KBmanager.getMgr();
@@ -177,6 +186,8 @@ class LocalRuntimeRunner {
      * @returns {Promise<object>} - The result including answers and proof
      */
     async ask(kbName, query, options = {}) {
+        if (!this.initialized) throw new Error("Cannot utilize local sigma runtime before its initialized");
+
         const jvm = this.gateway.jvm;
         const KBmanager = await jvm.com.articulate.sigma.KBmanager;
         const mgr = await KBmanager.getMgr();

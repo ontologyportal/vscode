@@ -60,6 +60,10 @@
         {
           "name": "keyword.control.quantifier.suo-kif",
           "match": "\\b(forall|exists)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.suo-kif",
+          "match": "\\b(equal)\\b"
         }
       ]
     },
@@ -68,10 +72,6 @@
         {
           "name": "keyword.control.logic.suo-kif",
           "match": "(=>|<=>)"
-        },
-        {
-          "name": "keyword.operator.comparison.suo-kif",
-          "match": "(equal)"
         }
       ]
     },

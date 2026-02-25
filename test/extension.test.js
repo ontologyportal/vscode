@@ -1,15 +1,5 @@
 /**
- * Tests that verify extension.js is correctly wired up.
- *
- * Bug exposed:
- *   B1 - extension.js calls `updateFileDefinitions(document)` inside the
- *        document change/open/save listeners (via the `validate` helper at
- *        lines 160-163), but `updateFileDefinitions` is NOT in the destructured
- *        import from './src/navigation'.  The import at line 14-21 only pulls
- *        in `updateDocumentDefinitions` (a different function).  This means
- *        that whenever a document is opened or changed, a
- *        ReferenceError: updateFileDefinitions is not defined
- *        is thrown at runtime, silently swallowed by VS Code's event dispatch.
+ * Extension imports sanity checks.
  */
 
 'use strict';
@@ -23,50 +13,6 @@ const NAVIGATION_SRC = path.join(__dirname, '../src/navigation.js');
 
 // ---------------------------------------------------------------------------
 describe('extension.js - import / wiring checks', function () {
-
-    // -----------------------------------------------------------------------
-    // B1: updateFileDefinitions not imported
-    // -----------------------------------------------------------------------
-    describe('B1 (fixed) - updateFileDefinitions is now correctly imported from navigation', function () {
-
-        it('extension.js imports and calls updateFileDefinitions', function () {
-            const source = fs.readFileSync(EXTENSION_SRC, 'utf-8');
-
-            // The function is called
-            expect(source).to.include('updateFileDefinitions(',
-                'extension.js must call updateFileDefinitions'
-            );
-
-            // FIX B1: updateFileDefinitions must now appear in the destructured require
-            const requireNavigation = source.match(
-                /const\s*\{([^}]+)\}\s*=\s*require\(['"]\.\/src\/navigation['"]\)/
-            );
-            expect(requireNavigation).to.not.be.null;
-            const importedNames = requireNavigation[1];
-            expect(importedNames).to.include('updateFileDefinitions',
-                'FIX B1: updateFileDefinitions should now be imported from ./src/navigation'
-            );
-        });
-
-        it('navigation.js exports updateFileDefinitions', function () {
-            const navSource = fs.readFileSync(NAVIGATION_SRC, 'utf-8');
-
-            const exportsBlock = navSource.match(/module\.exports\s*=\s*\{([\s\S]*?)\}/)?.[1] || '';
-            expect(exportsBlock).to.include('updateFileDefinitions',
-                'navigation.js must include updateFileDefinitions in module.exports'
-            );
-        });
-
-        it('the validate() closure in extension.js calls the correctly imported updateFileDefinitions', function () {
-            const source = fs.readFileSync(EXTENSION_SRC, 'utf-8');
-
-            const validateClosure = source.match(/const validate[\s\S]*?updateFileDefinitions\([^)]*\)/)?.[0];
-            expect(validateClosure).to.not.be.null;
-            expect(validateClosure).to.include('updateFileDefinitions',
-                'validate() should call updateFileDefinitions, which is now properly imported'
-            );
-        });
-    });
 
     // -----------------------------------------------------------------------
     // Structural checks: all imported names should exist in their respective modules

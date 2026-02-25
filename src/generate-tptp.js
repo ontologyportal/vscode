@@ -79,7 +79,8 @@ async function generateTPTPCommand(context) {
             }
         });
     } catch (e) {
-        vscode.window.showErrorMessage('Sigma not configured. Please set "sumo.sigmaPath", or enable an alternative sigma runtime. Error: ' + e.message);
+        console.error(e);
+        vscode.window.showErrorMessage(e.message);
         return;
     }
     
