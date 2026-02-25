@@ -12,6 +12,7 @@
   "license": "MIT",
   "scripts": {
     "test": "mocha 'test/**/*.test.js' 'test-c/**/*.test.js'",
+    "test:integration": "mocha 'test-integration/**/*.test.js' --timeout 180000",
     "test:watch": "mocha --watch test/**/*.test.js",
     "lint": "node --check extension.js && node --check src/**/*.js",
     "build": "vsce package -o ./dist",

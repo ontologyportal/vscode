@@ -51,9 +51,10 @@ class SigmaRuntime {
     /**
      * Initialize the runtime
      * @param {vscode.ExtensionContext} context
+     * @param {vscode.OutputChannel} outputChannel
      * @return {Promise<void>}
      */
-    async initialize(context) {
+    async initialize(context, outputChannel) {
         throw new Error("Cannot invoke abstract interface functions");
     }
 
@@ -132,24 +133,42 @@ class SigmaRuntime {
 
     /**
      * Assert a statement into a knowledge base
-     * @param {string} kbName 
-     * @param {string} statement 
+     * @param {string} kbName
+     * @param {string} sessionID
+     * @param {string} statement
      * @returns {Promise<string[]>}
      */
-    async tell(kbName, statement) {
+    async tell(kbName, sessionID, statement) {
         throw new Error("Cannot invoke abstract interface functions");
     }
 
     /**
      * Query a knowledge base
-     * @param {string} kbName 
-     * @param {string} query 
-     * @param {object} options 
+     * @param {string} kbName
+     * @param {string} sessionID
+     * @param {string} query
+     * @param {object} options
      * @returns {Promise<object>}
      */
-    async ask(kbName, query, options) {
+    async ask(kbName, sessionID, query, options) {
         throw new Error("Cannot invoke abstract interface functions");
     }
+
+    /**
+     * Reload a knowledge base (re-reads constituent files from disk)
+     * @param {string} kbName
+     * @returns {Promise<void>}
+     */
+    async reloadKB(kbName) {
+        throw new Error("Cannot invoke abstract interface functions");
+    }
+
+    /**
+     * Mark a knowledge base as needing reload before the next operation.
+     * No-op by default; only meaningful for runtimes that support live reload.
+     * @param {string} kbName
+     */
+    markDirty(kbName) {}
 }
 
 class LocalRuntime extends SigmaRuntime {
@@ -168,11 +187,16 @@ class LocalRuntime extends SigmaRuntime {
     /**
      * Initialize the runtime
      * @param {vscode.ExtensionContext} context
+     * @param {vscode.OutputChannel} outputChannel
      * @return {Promise<void>}
      */
-    async initialize(context) {
+    async initialize(context, outputChannel) {
         if (this.runner.initialized) return;
-        await this.runner.initialize(context);
+        await this.runner.initialize(context, {
+            stdout: (data) => { outputChannel.append(data) },
+            stderr: (data) => { outputChannel.append('[ERROR]' + data) },
+            close: () => { outputChannel.appendLine("Sigma shutdown"); outputChannel.clear(); }
+        });
     }
 
     /**
@@ -212,41 +236,42 @@ class LocalRuntime extends SigmaRuntime {
         return "Local Sigma"
     }
 
-    /**
-     * Convert a knowledge base to an output language
-     * @param { vscode.ExtensionContext } context The vscode extension context
-     * @param { string } kbName The name of the KB to convert
-     * @returns { string }
-     */
+    markDirty(kbName) {
+        this.runner.markDirty(kbName);
+    }
+
     async compileKB(context, kbName) {
+        await this.runner.reloadDirtyKBs();
         const tempDir = context.storageUri.fsPath;
         const tempFile = path.join(tempDir, `${kbName}-${Date.now()}.tptp`);
         return await this.runner.writeFile(tempFile, kbName);
     }
 
     async compileFormulas(context, formulas) {
-        // Since the Java bridge currently works best with KBs, we'll try to use the selected KB if available
+        await this.runner.reloadDirtyKBs();
         const kbName = vscode.workspace.getConfiguration('sumo').get('sigma.knowledgeBase') || 'SUMO';
         const tempDir = context.storageUri.fsPath;
         const tempFile = path.join(tempDir, `formulas-${Date.now()}.tptp`);
-        
-        // Use the first formula as a conjecture if possible, or just compile the KB
-        // This is a limitation of the current Java bridge writeFile implementation
         const conjecture = formulas.length > 0 ? formulas[0] : null;
         const filePath = await this.runner.writeFile(tempFile, kbName, conjecture);
-        
         const content = await fs.promises.readFile(filePath, 'utf8');
-        return content.split('\n').filter(line => 
+        return content.split('\n').filter(line =>
             line.trim().startsWith('fof(') || line.trim().startsWith('tff(')
         );
     }
 
-    async tell(kbName, statement) {
-        return await this.runner.tell(kbName, statement);
+    async tell(kbName, sessionID, statement) {
+        await this.runner.reloadDirtyKBs();
+        return await this.runner.tell(kbName, sessionID, statement);
     }
 
-    async ask(kbName, query, options) {
-        return await this.runner.ask(kbName, query, options);
+    async ask(kbName, sessionID, query, options) {
+        await this.runner.reloadDirtyKBs();
+        return await this.runner.ask(kbName, sessionID, query, options);
+    }
+
+    async reloadKB(kbName) {
+        return await this.runner.reloadKB(kbName);
     }
 }
 
@@ -340,12 +365,16 @@ class DockerRuntime extends SigmaRuntime {
         throw new Error("Compiling formulas is currently not implemented for dockerized sigma")
     }
 
-    async tell(kbName, statement) {
+    async tell(kbName, sessionID, statement) {
         throw new Error("Tell functionality is currently not implemented for dockerized sigma")
     }
 
-    async ask(kbName, query, options) {
+    async ask(kbName, sessionID, query, options) {
         throw new Error("Ask functionality is currently not implemented for dockerized sigma")
+    }
+
+    async reloadKB(kbName) {
+        throw new Error("Reload functionality is currently not implemented for dockerized sigma")
     }
 }
 
@@ -380,12 +409,16 @@ class NativeRuntime extends SigmaRuntime {
         );
     }
 
-    async tell(kbName, statement) {
+    async tell(kbName, sessionID, statement) {
         throw new Error("Tell functionality is currently not implemented for the native JS implementation")
     }
 
-    async ask(kbName, query, options) {
+    async ask(kbName, sessionID, query, options) {
         throw new Error("Ask functionality is currently not implemented for the native JS implementation")
+    }
+
+    async reloadKB(kbName) {
+        throw new Error("Reload functionality is currently not implemented for the native JS implementation")
     }
 }
 

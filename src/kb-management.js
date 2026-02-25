@@ -91,10 +91,11 @@ async function openKnowledgeBaseCommand() {
 
 /**
  * Add a new file to a knowledge base
- * @param {KBNode} node 
+ * @param {KBNode} node
+ * @param {{ triggerRestart?: boolean }} options
  * @returns {Promise<int>} The number of files added
  */
-async function addFileToKBCommand(node) {
+async function addFileToKBCommand(node, { triggerRestart = true } = {}) {
     if (!node || !node.kb) return;
     const { name: kbName, kbDir } = node.kb;
 
@@ -122,6 +123,7 @@ async function addFileToKBCommand(node) {
 
     const errors = [];
     let files = 0;
+    let configured = 0;
     for (const uri of fileUris) {
         let filename;
         if (!copyFile) { // If not copying, just get the selected path
@@ -152,6 +154,7 @@ async function addFileToKBCommand(node) {
         try {
             // Add the file to the config.xml
             await addFileToConfig(kbName, filename);
+            configured++;
         } catch (e) {
             errors.push(e.message);
         }
@@ -163,6 +166,10 @@ async function addFileToKBCommand(node) {
 
     // Refresh the knowledge base listing
     await openKnowledgeBaseCommand();
+
+    if (triggerRestart && configured > 0) {
+        vscode.commands.executeCommand('sumo.restartSigma');
+    }
 
     return files;
 }
@@ -194,6 +201,8 @@ async function removeFileFromKBCommand(node) {
 
     // Refresh the knowledge base listing
     await openKnowledgeBaseCommand();
+
+    vscode.commands.executeCommand('sumo.restartSigma');
 }
 
 /**
@@ -219,7 +228,9 @@ async function createKnowledgeBaseCommand() {
         return;
     }
 
-    const numFiles = await addFileToKBCommand({kb: { name: kbName, kbDir }});
+    const numFiles = await addFileToKBCommand({kb: { name: kbName, kbDir }}, { triggerRestart: false });
+
+    vscode.commands.executeCommand('sumo.restartSigma');
 
     const action = await vscode.window.showInformationMessage(
         `Knowledge Base "${kbName}" created with ${numFiles} constituent(s).`,

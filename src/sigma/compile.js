@@ -8,13 +8,7 @@ const { getSigmaRuntime } = require('./engine');
  * @returns {Promise<string[]>} The compiled formulas
  */
 async function compileKB(context, kbName) {
-    const outputChannel = vscode.window.createOutputChannel("Sigma Compilation");
-    outputChannel.show();
-
     const runtime = getSigmaRuntime();
-    outputChannel.appendLine(`Starting compilation for KB: ${kbName}`);
-    outputChannel.appendLine(`Runtime: ${runtime.getName()}`);
-
     return runtime.compileKB(context, kbName);
 }
 
@@ -25,9 +19,6 @@ async function compileKB(context, kbName) {
  * @returns {Promise<string[]>} The compiled formulas in appropriate TPTP form
  */
 async function compileFormulas(context, formulas) {
-    const outputChannel = vscode.window.createOutputChannel("Sigma Compilation");
-    outputChannel.show();
-
     if (!formulas || formulas.length === 0) {
         outputChannel.appendLine("Error: No formulas provided for compilation.");
         return;
@@ -35,8 +26,6 @@ async function compileFormulas(context, formulas) {
 
     const combinedFormula = `(and ${formulas.join(' ')})`;
     const runtime = getSigmaRuntime();
-    outputChannel.appendLine(`Compiling combined formula: ${combinedFormula}`);
-    outputChannel.appendLine(`Runtime: ${runtime.getName()}`);
 
     return runtime.compileFormulas(context, formulas);
 }

@@ -12,40 +12,40 @@ const { getSigmaRuntime, SigmaRuntime } = require('./runtime');
  * @param {string} configVar The name of the config variable
  * @param {SigmaRuntime} runtime The runtime to get the env from
  * @param {string} envVar The name of the fallback environment variable 
- * @returns {string | null}
+ * @returns {Promise<string | null>}
  */
-function getConfigEnvFallback(configVar, runtime, envVar) {
+async function getConfigEnvFallback(configVar, runtime, envVar) {
     const config = vscode.workspace.getConfiguration('sumo');
     const v = config.get(configVar);
     if (v != null && v !== '') return v;
-    return runtime.getEnvironmentVar(envVar);
+    return await runtime.getEnvironmentVar(envVar);
 }
 
 /**
  * Helper to get path to sigma source (i.e. SIGMA_SRC)
- * @returns {string | null}
+ * @returns {Promise<string | null>}
  */
-function getSigmaPath() {
+async function getSigmaPath() {
     // Check config from vscode
     const runtime = getSigmaRuntime();
-    let sigmaPath = getConfigEnvFallback('sigma.srcPath', runtime, environment.source);
+    let sigmaPath = await getConfigEnvFallback('sigma.srcPath', runtime, environment.source);
 
     if (!sigmaPath) return null;
-    if (runtime.existsAtPath(sigmaPath)) return sigmaPath;
+    if (await runtime.existsAtPath(sigmaPath)) return sigmaPath;
     return null;
 }
 
 /**
  * Helper to get the path to sigma home (i.e. SIGMA_HOME)
- * @returns {string | null}
+ * @returns {Promise<string | null>}
  */
-function getSigmaHome() {
+async function getSigmaHome() {
     // Check config from vscode
     const runtime = getSigmaRuntime();
-    let sigmaPath = getConfigEnvFallback('sigma.homePath', runtime, environment.home);
+    let sigmaPath = await getConfigEnvFallback('sigma.homePath', runtime, environment.home);
 
     if (!sigmaPath) return null;
-    if (runtime.existsAtPath(sigmaPath)) return sigmaPath;
+    if (await runtime.existsAtPath(sigmaPath)) return sigmaPath;
     return null;
 }
 

@@ -27,6 +27,17 @@ async function ask(kbName, query, options = {}) {
     return await getSigmaRuntime().ask(kbName, query, options);
 }
 
+// /**
+//  * Reset the current state of a KB
+//  * @param {string} kbName 
+//  * @param {string} query 
+//  * @param {object} options 
+//  * @returns {Promise<object>}
+//  */
+// async function ask(kbName, query, options = {}) {
+//     return await getSigmaRuntime().ask(kbName, query, options);
+// }
+
 module.exports = {
     getSigmaPath,
     getSigmaHome,

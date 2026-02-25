@@ -1,7 +1,7 @@
 /* primary extension code for VSCode plugin */
 
 const vscode = require('vscode');
-const path = require('path');
+const fs = require('fs');
 
 const { 
     getSigmaRuntime,
@@ -70,6 +70,11 @@ async function activate(context) {
     setDiagnosticCollection(diagnosticCollection);           // navigation.js
     setValidationDiagnosticCollection(diagnosticCollection); // validation.js checkErrorsCommand
 
+    // Create storage URI
+    if (!fs.existsSync(context.storageUri.fsPath)) {
+        fs.mkdirSync(context.storageUri.fsPath, { mode: 0o744 });
+    }
+
     // Create a new provider to track the knowledge bases on the system
     kbTreeProvider = new KBTreeProvider();
     setKBTreeProvider(kbTreeProvider);
@@ -77,6 +82,9 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('sumo.kbExplorer', kbTreeProvider)
     );
+
+    const outputChannel = vscode.window.createOutputChannel("Sigma");
+    outputChannel.show();
 
     // Register Commands
     context.subscriptions.push(vscode.commands.registerCommand('sumo.searchSymbol', searchSymbolCommand));
@@ -89,6 +97,21 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('sumo.runProverOnScope', runProverOnScopeCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.generateTPTP', () => generateTPTPCommand(context)));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.openRepl', openSumoRepl));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.restartSigma', async () => {
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Restarting Sigma...',
+            cancellable: false
+        }, async () => {
+            try {
+                await getSigmaRuntime().shutdown();
+                await getSigmaRuntime().initialize(context, outputChannel);
+                vscode.window.showInformationMessage('Sigma runtime restarted');
+            } catch (e) {
+                vscode.window.showErrorMessage('Failed to restart Sigma runtime: ' + e.message);
+            }
+        });
+    }));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.openKnowledgeBase', openKnowledgeBaseCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.createKnowledgeBase', createKnowledgeBaseCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.refresh', openKnowledgeBaseCommand));
@@ -103,7 +126,7 @@ async function activate(context) {
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
         if (event.affectsConfiguration("sumo.sigma.runtime")) {
             await getSigmaRuntime().shutdown();
-            await getSigmaRuntime().initialize(context);
+            await getSigmaRuntime().initialize(context, outputChannel);
         }
     }));
 
@@ -161,7 +184,17 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.workspace.onDidOpenTextDocument(validate),
         vscode.workspace.onDidChangeTextDocument(e => validate(e.document)),
-        vscode.workspace.onDidSaveTextDocument(validate)
+        vscode.workspace.onDidSaveTextDocument((document) => {
+            validate(document);
+            if (document.languageId !== 'suo-kif') return;
+            const filePath = document.uri.fsPath;
+            const affectedKBs = (kbTreeProvider?.kbs || [])
+                .filter(kb => kb.constituents.includes(filePath));
+            const runtime = getSigmaRuntime();
+            for (const kb of affectedKBs) {
+                runtime.markDirty(kb.name);
+            }
+        })
     );
 
     vscode.workspace.textDocuments.forEach(validate);
@@ -213,7 +246,7 @@ async function activate(context) {
         cancellable: false
     }, async (progress) => {
         try {
-            await getSigmaRuntime().initialize(context);
+            await getSigmaRuntime().initialize(context, outputChannel);
             vscode.window.showInformationMessage('Successfully started Sigma runtime');
         } catch (e) {
             vscode.window.showErrorMessage('Failed to start Sigma runtime');

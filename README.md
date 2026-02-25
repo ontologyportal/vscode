@@ -9,7 +9,7 @@ Manage your Sigma Knowledge Bases directly from the sidebar.
 - **Open KB**: Automatically detect and load KBs from your Sigma `config.xml`.
 - **Add/Remove Files**: Easily manage constituent `.kif` files.
 - **Create KB**: Scaffold new knowledge bases with a simple guided process.
-- **Context Awareness**: The extension tracks which KB you are currently working in, enabling KB-specific search and navigation.
+- **Context Awareness**: The extension tracks which knowledge base you are currently working in; all auto-completion and documentation features are scoped to the current KB.
 
 ![KB Explorer](doc/screenshots/kb-explorer.png)
 
