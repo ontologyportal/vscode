@@ -2,3 +2,5 @@
 *.vsix
 node_modules
 dist/
+test/Merge.kif
+.vscode-test/

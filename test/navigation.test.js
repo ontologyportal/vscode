@@ -209,7 +209,7 @@ describe('navigation.js', function () {
     });
 
     // -----------------------------------------------------------------------
-    describe('Entity root check with Merge.kif', function () {
+    describe('Entity root check with tinySUMO.kif', function () {
 
         it('builds a taxonomy that can reach Entity from core SUMO terms', function () {
             const { mod, vscode } = loadNavigation();
@@ -218,9 +218,9 @@ describe('navigation.js', function () {
             mod.setDiagnosticCollection(collection);
 
             const kifText = require('fs').readFileSync(
-                path.join(__dirname, 'Merge.kif'), 'utf-8'
+                path.join(__dirname, 'tinySUMO.kif'), 'utf-8'
             );
-            const doc = createMockDocument(kifText, '/test/Merge.kif');
+            const doc = createMockDocument(kifText, '/test/tinySUMO.kif');
             mod.updateFileDefinitions(doc, 'SUMO');
 
             const taxonomy = mod.getWorkspaceTaxonomy();
@@ -246,22 +246,22 @@ describe('navigation.js', function () {
             }
         });
 
-        it('produces no false-positive "no taxonomy path to Entity" errors for Merge.kif terms', function () {
+        it('produces no false-positive "no taxonomy path to Entity" errors for tinySUMO.kif terms', function () {
             const { mod, vscode } = loadNavigation();
             mod.setKB('SUMO');
             const collection = vscode.languages.createDiagnosticCollection('sumo');
             mod.setDiagnosticCollection(collection);
 
             const kifText = require('fs').readFileSync(
-                path.join(__dirname, 'Merge.kif'), 'utf-8'
+                path.join(__dirname, 'tinySUMO.kif'), 'utf-8'
             );
-            const doc = createMockDocument(kifText, '/test/Merge.kif');
+            const doc = createMockDocument(kifText, '/test/tinySUMO.kif');
             mod.updateFileDefinitions(doc, 'SUMO');
 
-            const diags = collection.get('/test/Merge.kif') || [];
+            const diags = collection.get('/test/tinySUMO.kif') || [];
             const pathErrors = diags.filter(d => d.message.includes('no taxonomy path to Entity'));
             expect(pathErrors).to.have.lengthOf(0,
-                'no false-positive "no taxonomy path" errors for Merge.kif: ' +
+                'no false-positive "no taxonomy path" errors for tinySUMO.kif: ' +
                 pathErrors.map(d => d.message).join('; ')
             );
         });

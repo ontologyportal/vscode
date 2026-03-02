@@ -206,10 +206,10 @@ function tokenize(text, file = 'unknown') {
                         file
                     ));
                 }
-            } else if (charSet.initialChar.includes(value.at(0))) {
-                type = TokenType.ATOM;
             } else if (charSet.operators.includes(value)) {
                 type = TokenType.OPERATOR;
+            } else if (charSet.initialChar.includes(value.at(0))) {
+                type = TokenType.ATOM;
             } else {
                 errors.push(new TokenizerError(
                     row, startCol,

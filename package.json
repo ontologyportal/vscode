@@ -13,6 +13,7 @@
   "scripts": {
     "test": "mocha 'test/**/*.test.js' 'test-c/**/*.test.js'",
     "test:integration": "mocha 'test-integration/**/*.test.js' --timeout 180000",
+    "test:vscode": "node test-vscode/runTests.js",
     "test:watch": "mocha --watch test/**/*.test.js",
     "lint": "node --check extension.js && node --check src/**/*.js",
     "build": "vsce package -o ./dist",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.7.1",
     "chai": "^4.5.0",
     "mocha": "^5.0.5",

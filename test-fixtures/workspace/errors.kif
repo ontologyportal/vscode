@@ -1,0 +1,7 @@
+; Intentionally malformed KIF used to verify that sumo.checkErrors fires diagnostics.
+
+; Class argument starts with lowercase — should trigger a capitalisation warning.
+(subclass cat Mammal)
+
+; Instance class argument starts with lowercase — should trigger a capitalisation warning.
+(instance rover dog)

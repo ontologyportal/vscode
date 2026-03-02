@@ -295,7 +295,35 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
     `;
 }
 
+/**
+ * Convert a terms map (from semantics()) to the parent/child graph format
+ * expected by generateTaxonomyHtml and getWorkspaceTaxonomy().
+ *
+ * @param {{ [name: string]: import('./parser/term').Term }} terms
+ * @returns {{
+ *   parents:  { [child:  string]: { name: string, type: string }[] },
+ *   children: { [parent: string]: { name: string, type: string }[] }
+ * }}
+ */
+function termsToGraphs(terms) {
+    const parents  = {};
+    const children = {};
+    for (const term of Object.values(terms)) {
+        const name = term.name;
+        for (const edge of term.taxonomy.incoming) {
+            if (!parents[name]) parents[name] = [];
+            parents[name].push({ name: edge.from.name, type: edge.relation });
+        }
+        for (const edge of term.taxonomy.outgoing) {
+            if (!children[name]) children[name] = [];
+            children[name].push({ name: edge.to.name, type: edge.relation });
+        }
+    }
+    return { parents, children };
+}
+
 module.exports = {
     showTaxonomyCommand,
     generateTaxonomyHtml,
+    termsToGraphs,
 };

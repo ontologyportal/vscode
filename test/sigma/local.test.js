@@ -473,7 +473,7 @@ describe('LocalRuntimeRunner', function () {
         it('throws when not initialized', async function () {
             const runner = new LocalRuntimeRunner();
             let threw = null;
-            try { await runner.ask('SUMO', '(instance ?X Human)'); }
+            try { await runner.ask('SUMO', 'session-1', '(instance ?X Human)'); }
             catch (e) { threw = e; }
             expect(threw).to.exist;
             expect(threw.message).to.include('initialized');
@@ -482,7 +482,7 @@ describe('LocalRuntimeRunner', function () {
         it('throws "Unknown KB" when getKB returns null', async function () {
             const { runner } = buildTestRig({ getKBResult: null });
             let threw = null;
-            try { await runner.ask('BadKB', '(instance ?X Human)'); }
+            try { await runner.ask('BadKB', 'session-1', '(instance ?X Human)'); }
             catch (e) { threw = e; }
             expect(threw).to.exist;
             expect(threw.message).to.include('Unknown KB');
@@ -491,7 +491,7 @@ describe('LocalRuntimeRunner', function () {
         it('throws "Unsupported engine" for unknown engine names', async function () {
             const { runner } = buildTestRig();
             let threw = null;
-            try { await runner.ask('SUMO', '(instance ?X Human)', { engine: 'prolog' }); }
+            try { await runner.ask('SUMO', 'session-1', '(instance ?X Human)', { engine: 'prolog' }); }
             catch (e) { threw = e; }
             expect(threw).to.exist;
             expect(threw.message).to.include('Unsupported engine');
