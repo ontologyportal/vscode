@@ -75,7 +75,7 @@ async function openKnowledgeBaseCommand() {
         title: `Running Sigma Translation...`,
         cancellable: false
     }, async (progress) => {
-        await buildWorkspaceDefinitions();
+        await buildWorkspaceDefinitions(progress);
     });
     await vscode.commands.executeCommand('sumo.kbExplorer.focus');
     await vscode.commands.executeCommand('setContext', 'sumo.KBOpened', true);
@@ -272,9 +272,21 @@ function updateActiveEditorContext(editor) {
     setKB(null);
 }
 
+/**
+ * Refresh the KB explorer tree using the already-loaded KB data.
+ * Unlike openKnowledgeBaseCommand, this does not re-parse the config
+ * or rebuild workspace definitions.
+ */
+function refreshKBExplorerCommand() {
+    if (kbTreeProvider) {
+        kbTreeProvider.refresh(kbTreeProvider.kbs);
+    }
+}
+
 module.exports = {
     setKBTreeProvider,
     openKnowledgeBaseCommand,
+    refreshKBExplorerCommand,
     addFileToKBCommand,
     removeFileFromKBCommand,
     createKnowledgeBaseCommand,

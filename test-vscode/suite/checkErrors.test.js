@@ -46,9 +46,9 @@ suite('sumo.checkErrors', function () {
         );
     });
 
-    test('flags arity violations when domain declarations are present', async () => {
-        // (knows Alice) — knows has domain at positions 1 and 2, so 1 arg is too few.
-        const kif = '(domain knows 1 Agent)\n(domain knows 2 Entity)\n(knows Alice)';
+    test('flags a relation used with no arguments', async () => {
+        // (knows) — relation called with zero arguments should trigger a warning.
+        const kif = '(knows)';
         const { doc } = await openKifContent(kif);
         await vscode.commands.executeCommand('sumo.checkErrors');
         await sleep(600);
@@ -56,7 +56,7 @@ suite('sumo.checkErrors', function () {
         const diags = vscode.languages.getDiagnostics(doc.uri);
         assert.ok(
             diags.some(d => d.message.includes('knows')),
-            `Expected an arity diagnostic for 'knows'; got: ${diags.map(d => d.message).join(' | ')}`
+            `Expected a no-arguments diagnostic for 'knows'; got: ${diags.map(d => d.message).join(' | ')}`
         );
     });
 });

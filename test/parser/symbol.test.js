@@ -79,30 +79,30 @@ describe('Symbol Analysis', function() {
             expect(sentences).to.have.lengthOf(1);
         });
 
-        it('should expose the head symbol as functionalTerm', function() {
+        it('should expose the head symbol as the first term', function() {
             const { syntax: sentences } = parse('(instance ?X Human)');
-            expect(sentences[0].functionalTerm).to.not.be.null;
-            expect(sentences[0].functionalTerm.name).to.equal('instance');
+            expect(sentences[0].terms[0]).to.not.be.null;
+            expect(sentences[0].terms[0].name).to.equal('instance');
         });
 
-        it('should place arguments (not the head) into terms', function() {
+        it('should place all elements including head into terms', function() {
             const { syntax: sentences } = parse('(instance ?X Human)');
-            // terms = [VariableSym(?X), Symbol(Human)]; head is stored separately
-            expect(sentences[0].terms).to.have.lengthOf(2);
+            // terms = [Symbol(instance), VariableSym(?X), Symbol(Human)]
+            expect(sentences[0].terms).to.have.lengthOf(3);
         });
 
         it('should parse a nullary call (head with no arguments)', function() {
             const { syntax: sentences, errors } = parse('(foo)');
             expect(errors).to.be.empty;
-            expect(sentences[0].functionalTerm.name).to.equal('foo');
-            expect(sentences[0].terms).to.have.lengthOf(0);
+            expect(sentences[0].terms[0].name).to.equal('foo');
+            expect(sentences[0].terms).to.have.lengthOf(1);
         });
 
         it('should parse nested functional sentences', function() {
             const { syntax: sentences, errors } = parse('(instance (FunctionFn ?X) Human)');
             expect(errors).to.be.empty;
-            // outer terms: [(FunctionFn ?X) sentence, Symbol(Human)]
-            expect(sentences[0].terms).to.have.lengthOf(2);
+            // outer terms: [Symbol(instance), (FunctionFn ?X) sentence, Symbol(Human)]
+            expect(sentences[0].terms).to.have.lengthOf(3);
         });
 
         it('should set parent to null for top-level sentences', function() {
@@ -119,12 +119,13 @@ describe('Symbol Analysis', function() {
     // -------------------------------------------------------------------------
     describe('operator sentences', function() {
         describe('and', function() {
-            it('should parse (and A B) with two child terms', function() {
+            it('should parse (and A B) with operator + two child terms', function() {
                 const { syntax: sentences, errors } = parse(
                     '(and (instance ?X Human) (instance ?X Animal))'
                 );
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(2);
+                // terms[0] = Operator(and), terms[1] = S1, terms[2] = S2
+                expect(sentences[0].terms).to.have.lengthOf(3);
             });
 
             it('should allow more than two children (variadic)', function() {
@@ -132,17 +133,18 @@ describe('Symbol Analysis', function() {
                     '(and (instance ?X Human) (instance ?X Animal) (instance ?X Mammal))'
                 );
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(3);
+                // terms[0] = Operator, then 3 child sentences
+                expect(sentences[0].terms).to.have.lengthOf(4);
             });
         });
 
         describe('or', function() {
-            it('should parse (or A B) with two child terms', function() {
+            it('should parse (or A B) with operator + two child terms', function() {
                 const { syntax: sentences, errors } = parse(
                     '(or (instance ?X Human) (instance ?X Animal))'
                 );
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(2);
+                expect(sentences[0].terms).to.have.lengthOf(3);
             });
 
             it('should allow more than two children (variadic)', function() {
@@ -150,15 +152,16 @@ describe('Symbol Analysis', function() {
                     '(or (instance ?X A) (instance ?X B) (instance ?X C))'
                 );
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(3);
+                expect(sentences[0].terms).to.have.lengthOf(4);
             });
         });
 
         describe('not', function() {
-            it('should parse (not A) with one child term', function() {
+            it('should parse (not A) with operator + one child term', function() {
                 const { syntax: sentences, errors } = parse('(not (instance ?X Human))');
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(1);
+                // terms[0] = Operator(not), terms[1] = the child sentence
+                expect(sentences[0].terms).to.have.lengthOf(2);
             });
 
             it('should error when not has more than one argument', function() {
@@ -175,7 +178,8 @@ describe('Symbol Analysis', function() {
                     '(=> (instance ?X Human) (instance ?X Animal))'
                 );
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(2);
+                // terms[0] = Operator(=>), terms[1] = antecedent, terms[2] = consequent
+                expect(sentences[0].terms).to.have.lengthOf(3);
             });
 
             it('should error with more than two arguments', function() {
@@ -192,7 +196,7 @@ describe('Symbol Analysis', function() {
                     '(<=> (instance ?X Human) (instance ?X Animal))'
                 );
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(2);
+                expect(sentences[0].terms).to.have.lengthOf(3);
             });
 
             it('should error with more than two arguments', function() {
@@ -207,7 +211,8 @@ describe('Symbol Analysis', function() {
             it('should parse (equal left right)', function() {
                 const { syntax: sentences, errors } = parse('(equal ?X ?Y)');
                 expect(errors).to.be.empty;
-                expect(sentences[0].terms).to.have.lengthOf(2);
+                // terms[0] = Operator(equal), terms[1] = ?X, terms[2] = ?Y
+                expect(sentences[0].terms).to.have.lengthOf(3);
             });
 
             it('should error with more than two arguments', function() {
@@ -317,10 +322,10 @@ describe('Symbol Analysis', function() {
             expect(symbolTable.symbols).to.not.have.property('and');
         });
 
-        it('references is a Map keyed by file', function() {
-            const { symbolTable } = parse('(instance ?X Human)');
+        it('references is a Map keyed by Sentence', function() {
+            const { syntax: sentences, symbolTable } = parse('(instance ?X Human)');
             expect(symbolTable.symbols['Human'].references).to.be.instanceof(Map);
-            expect(symbolTable.symbols['Human'].references.has('test.kif')).to.be.true;
+            expect(symbolTable.symbols['Human'].references.has(sentences[0])).to.be.true;
         });
 
         it('should deduplicate a symbol used in multiple sentences', function() {
@@ -356,10 +361,10 @@ describe('Symbol Analysis', function() {
             const { symbolTable } = parse(
                 '(instance ?X Human)(subclass Human Animal)'
             );
-            const refs = symbolTable.symbols['Human'].references.get('test.kif');
-            expect(refs).to.have.lengthOf(2);
-            const [, node0] = refs[0];
-            const [, node1] = refs[1];
+            // Map is keyed by Sentence; values are arrays of ASTNodes
+            const allNodes = [...symbolTable.symbols['Human'].references.values()].flat();
+            expect(allNodes).to.have.lengthOf(2);
+            const [node0, node1] = allNodes;
             const line0 = node0.startToken.line;
             const col0  = node0.startToken.column;
             const line1 = node1.startToken.line;
@@ -412,11 +417,12 @@ describe('Symbol Analysis', function() {
             const { syntax: sentences } = parse(
                 '(and (instance ?X Human) (instance ?X Animal))'
             );
-            // Both inner sentences share the parent `and` scope
-            const inner1 = sentences[0].terms[0]; // FunctionalSentence for (instance ?X Human)
-            const inner2 = sentences[0].terms[1]; // FunctionalSentence for (instance ?X Animal)
-            // First argument of each is ?X — both should be the exact same VariableSym
-            expect(inner1.terms[0]).to.equal(inner2.terms[0]);
+            // terms[0]=Operator(and), terms[1]=Sentence(instance ?X Human), terms[2]=Sentence(instance ?X Animal)
+            const inner1 = sentences[0].terms[1];
+            const inner2 = sentences[0].terms[2];
+            // Within each inner sentence: terms[0]=Symbol(instance), terms[1]=VariableSym(?X)
+            // Both ?X references must resolve to the exact same VariableSym object
+            expect(inner1.terms[1]).to.equal(inner2.terms[1]);
         });
 
         it('should give each top-level quantifier its own scope object', function() {
@@ -437,8 +443,8 @@ describe('Symbol Analysis', function() {
             const { syntax: sentences } = parse(
                 '(forall (?X) (instance ?X Human))'
             );
-            // The body sentence is the second term of forall; its scope inherits ?X
-            const body = sentences[0].terms[1]; // (instance ?X Human)
+            // terms[0]=Operator(forall), terms[1]=variable-list (?X), terms[2]=body
+            const body = sentences[0].terms[2]; // (instance ?X Human)
             expect(body.scope).to.have.property('?X');
         });
     });
@@ -483,6 +489,25 @@ describe('Symbol Analysis', function() {
             );
             expect(sentences[0].parent).to.be.null;
             expect(sentences[1].parent).to.be.null;
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    describe('symbolTable.lookup', function() {
+        // Helper that returns a populated symbol table for lookup tests
+        function kb(...kifStrings) {
+            let result;
+            for (const kif of kifStrings) {
+                result = parse(kif, result?.symbolTable);
+            }
+            return result.symbolTable;
+        }
+
+        it('lookup is defined and behaves as a proxy', function() {
+            const st = kb('(instance ?X Human)');
+            expect(st.lookup).to.exist;
+            // Proxy behaviour: accessing $ triggers query resolution and returns a Set
+            expect(st.lookup.$).to.be.instanceof(Set);
         });
     });
 });

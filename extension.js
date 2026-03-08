@@ -9,14 +9,15 @@ const {
 
 const { KBTreeProvider } = require('./src/kb-tree');
 
-const { 
-    searchSymbolCommand, 
-    goToDefinitionCommand, 
+const {
+    searchSymbolCommand,
+    goToDefinitionCommand,
     provideDefinition,
     updateFileDefinitions,
     getKB,
     setDiagnosticCollection,
-    browseInSigmaCommand
+    browseInSigmaCommand,
+    lookupQueryCommand,
 } = require('./src/navigation');
 
 const { showTaxonomyCommand } = require('./src/taxonomy');
@@ -41,11 +42,12 @@ const { generateTPTPCommand } = require('./src/generate-tptp');
 
 const { openSumoRepl } = require('./src/sumo-repl');
 
-const { 
-    setKBTreeProvider, 
-    openKnowledgeBaseCommand, 
-    addFileToKBCommand, 
-    removeFileFromKBCommand, 
+const {
+    setKBTreeProvider,
+    openKnowledgeBaseCommand,
+    refreshKBExplorerCommand,
+    addFileToKBCommand,
+    removeFileFromKBCommand,
     createKnowledgeBaseCommand,
     updateActiveEditorContext
 } = require('./src/kb-management');
@@ -92,6 +94,7 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('sumo.formatAxiom', formatAxiomCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.goToDefinition', goToDefinitionCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.browseInSigma', browseInSigmaCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.lookupQuery', lookupQueryCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.checkErrors', checkErrorsCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.queryProver', queryProverCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.runProverOnScope', runProverOnScopeCommand));
@@ -114,7 +117,7 @@ async function activate(context) {
     }));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.openKnowledgeBase', openKnowledgeBaseCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.createKnowledgeBase', createKnowledgeBaseCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.refresh', openKnowledgeBaseCommand));
+    context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.refresh', refreshKBExplorerCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.addFile', addFileToKBCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.kbExplorer.removeFile', removeFileFromKBCommand));
 
@@ -176,16 +179,37 @@ async function activate(context) {
         })
     );
 
-    const validate = (document) => {
+    // Debounce map: fsPath → pending setTimeout handle
+    const pendingSaves = new Map();
+
+    const parseOnSave = (document) => {
         if (document.languageId !== 'suo-kif') return;
-        updateFileDefinitions(document);
+        const filePath = document.uri.fsPath;
+
+        // Cancel any queued parse for this file
+        if (pendingSaves.has(filePath)) {
+            clearTimeout(pendingSaves.get(filePath));
+        }
+
+        pendingSaves.set(filePath, setTimeout(() => {
+            pendingSaves.delete(filePath);
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Running Sigma Translation...`,
+                cancellable: false
+            }, async () => {
+                updateFileDefinitions(document);
+            });
+        }, 150));
     };
 
     context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument(validate),
-        vscode.workspace.onDidChangeTextDocument(e => validate(e.document)),
+        vscode.workspace.onDidOpenTextDocument(doc => {
+            if (doc.languageId !== 'suo-kif') return;
+            updateFileDefinitions(doc);
+        }),
         vscode.workspace.onDidSaveTextDocument((document) => {
-            validate(document);
+            parseOnSave(document);
             if (document.languageId !== 'suo-kif') return;
             const filePath = document.uri.fsPath;
             const affectedKBs = (kbTreeProvider?.kbs || [])
@@ -197,7 +221,9 @@ async function activate(context) {
         })
     );
 
-    vscode.workspace.textDocuments.forEach(validate);
+    vscode.workspace.textDocuments.forEach(doc => {
+        if (doc.languageId === 'suo-kif') updateFileDefinitions(doc);
+    });
 
     context.subscriptions.push(
         vscode.languages.registerHoverProvider('suo-kif', {
@@ -231,27 +257,47 @@ async function activate(context) {
         }, ' ', '(')
     );
 
-    await openKnowledgeBaseCommand();
-
     // Set initial state
     updateActiveEditorContext(vscode.window.activeTextEditor);
 
     // Update the status bar
     updateKBStatusBar();
 
-    // Start Sigma instance
-    await vscode.window.withProgress({
-        location: vscode.ProgressLocation.Notification,
-        title: `Starting Sigma...`,
-        cancellable: false
-    }, async (progress) => {
-        try {
-            await getSigmaRuntime().initialize(context, outputChannel);
-            vscode.window.showInformationMessage('Successfully started Sigma runtime');
-        } catch (e) {
-            vscode.window.showErrorMessage('Failed to start Sigma runtime');
-        }
-    });
+    // Defer heavy initialization (KB loading + Sigma) until a KIF file is
+    // actually the active editor.  The extension activates on onLanguage:suo-kif
+    // (so a KIF file was opened), but it may not be focused yet.
+    let kbInitialized = false;
+    async function initializeForKif() {
+        if (kbInitialized) return;
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.document.languageId !== 'suo-kif') return;
+        kbInitialized = true;
+
+        // Reveal the KB Explorer pane now that a KIF file is open.
+        vscode.commands.executeCommand('setContext', 'sumo.kifFileOpened', true);
+
+        openKnowledgeBaseCommand().catch(e => console.error('Failed to initialize KB:', e));
+
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `Starting Sigma...`,
+            cancellable: false
+        }, async () => {
+            try {
+                await getSigmaRuntime().initialize(context, outputChannel);
+                vscode.window.showInformationMessage('Successfully started Sigma runtime');
+            } catch (e) {
+                vscode.window.showErrorMessage('Failed to start Sigma runtime');
+            }
+        });
+    }
+
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(initializeForKif)
+    );
+
+    // Also run immediately if a KIF file is already the active editor at activation time.
+    initializeForKif();
 }
 
 /**

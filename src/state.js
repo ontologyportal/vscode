@@ -1,9 +1,15 @@
 /** Central state management module for the current knowledge bases */
 
 const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
 
 const { findConfigXml, parseConfigXml } = require('./sigma/config');
-const { Term, SymbolTable, syntax, semantics, tokenize } = require('./parser');
+const {
+    Term, SymbolTable, syntax, semantics: rawSemantics, tokenize,
+    TokenList, Sentence, OperatorSentence,
+} = require('./parser');
+const { Formula } = require('./parser/formula');
 
 // Global state variables
 
@@ -20,20 +26,34 @@ const { Term, SymbolTable, syntax, semantics, tokenize } = require('./parser');
 let terms = {};
 
 /**
- * The global symbol table, needed for per-file updates and reanalysis
- * @type {SymbolTable}
+ * Per-KB symbol tables, needed for per-file updates and reanalysis.
+ * Each KB gets its own isolated SymbolTable so cross-KB references
+ * (e.g. circular dependency detection) are never falsely reported.
+ * @type {{[kb: string]: SymbolTable}}
  */
-let _symbolTable = new SymbolTable();
+let _symbolTables = {};
 
 /**
- * Global diagnostics collection 
+ * Per-KB taxonomy cache, keyed first by KB name then by file path.
+ * @type {{[kb: string]: {[fsPath: string]: {relations: object[], docs: object[]}}}}
+ */
+let taxonomyCache = {};
+
+/**
+ * Per-KB metadata cache (invalidated on file update or KB switch).
+ * @type {{[kb: string]: object}}
+ */
+let workspaceMetadataCache = {};
+
+/**
+ * Global diagnostics collection
  * @type {vscode.DiagnosticCollection}
- * */
+ */
 let diagnosticCollection;
 
 /**
  * Set a global diagnostic collection
- * @param {vscode.DiagnosticCollection} collection 
+ * @param {vscode.DiagnosticCollection} collection
  */
 function setDiagnosticCollection(collection) {
     diagnosticCollection = collection;
@@ -43,12 +63,12 @@ function setDiagnosticCollection(collection) {
  * Get the global diagnostic collection
  * @returns {vscode.DiagnosticCollection|null}
  */
-function getDiagnosticCollection(collection) {
+function getDiagnosticCollection() {
     return diagnosticCollection;
 }
 
 /**
- * The current knowledge base 
+ * The current knowledge base
  * @type {string}
  */
 let currentKB = null;
@@ -59,6 +79,7 @@ let currentKB = null;
  */
 function setKB(kb) {
     currentKB = kb;
+    delete workspaceMetadataCache[kb]; // force re-computation for the newly active KB
 }
 
 /**
@@ -72,11 +93,11 @@ function getKB() {
 /**
  * Set the compiled terms
  * @param {string} kb The KB to set the terms for
- * @param {[name: string]: Term} newTerms The new terms to inject
+ * @param {{[name: string]: Term}} newTerms The new terms to inject
  */
 function setTerms(kb, newTerms) {
     if (!(kb in terms)) terms[kb] = {};
-    terms = Object.assign(terms[kb], newTerms);
+    Object.assign(terms[kb], newTerms);
 }
 
 /**
@@ -98,6 +119,15 @@ function clearTerms(kb) {
     } else {
         terms = {};
     }
+}
+
+/**
+ * Get the symbol table for the given KB (or the current KB if omitted).
+ * @param {string} [kb]
+ * @returns {SymbolTable|undefined}
+ */
+function getSymbolTable(kb) {
+    return _symbolTables[kb ?? currentKB];
 }
 
 /**
@@ -144,25 +174,22 @@ async function getKBFiles(kbName = undefined) {
             if (uris.length > 0) return uris;
         }
     }
-    return []
+    return [];
 }
 
 /**
  * Parse a token list into an AST, converting any ParsingError into a VS Code diagnostic.
- * On a parse error the diagnostic is pushed and an empty array is returned, so callers
- * can always treat the return value as a (possibly empty) AST without further error handling.
- * @param {import('./parser').Token[]} tokens - Token array from tokenize()
- * @param {vscode.Diagnostic[]} diagnostics - Accumulator array; parse errors are pushed here
- * @returns {import('./parser').ASTNode[]} Parsed top-level AST nodes
+ * @param {import('./parser').Token[]} tokens
+ * @param {vscode.Diagnostic[]} diagnostics
+ * @returns {import('./parser').ASTNode[]}
  */
 function parseWrapper(tokens, diagnostics) {
     const list = new TokenList(tokens);
     const { nodes, errors } = list.parse();
     for (const e of errors) {
         const startPos = new vscode.Position(e.line, e.column);
-        let endPos = startPos.translate(0, 1);
         diagnostics.push(new vscode.Diagnostic(
-            new vscode.Range(startPos, endPos),
+            new vscode.Range(startPos, startPos.translate(0, 1)),
             e.error || e.message,
             vscode.DiagnosticSeverity.Error
         ));
@@ -172,20 +199,18 @@ function parseWrapper(tokens, diagnostics) {
 
 /**
  * Tokenize a string into a list of tokens, converting any TokenizerErrors into a VS Code diagnostic.
- * On a tokenize error the diagnostic is pushed and the token array is returned, so callers
- * can always treat the return value as a list of tokens without further error handling.
- * @param {{text?: string, file?: string, doc?: vscode.TextDocument}} source - The source document (used for diagnostic positions)
- * @param {vscode.Diagnostic[]} diagnostics - Accumulator array; parse errors are pushed here
- * @returns {import('./parser').Token[]} Parsed top-level AST nodes
+ * @param {{text?: string, file?: string, doc?: vscode.TextDocument}} source
+ * @param {vscode.Diagnostic[]} diagnostics
+ * @returns {import('./parser').Token[]}
  */
 function tokenizeWrapper(source, diagnostics) {
-    let {text, doc, path} = source;
+    let { text, doc, path: filePath } = source;
     if (!text && !doc) throw new Error("tokenize must be provided either a text/doc property");
     if (!text) {
         text = doc.getText();
-        path = doc.uri.path
+        filePath = doc.uri.fsPath;
     }
-    const {tokens, errors} = tokenize(text, path);
+    const { tokens, errors } = tokenize(text, filePath);
     for (const e of errors) {
         const pos = new vscode.Position(e.line, e.col);
         diagnostics.push(new vscode.Diagnostic(
@@ -198,40 +223,43 @@ function tokenizeWrapper(source, diagnostics) {
 }
 
 /**
- * Wrapper for syntax and semantics to correctly capture errors
- * @param {import('./parser/parser').ASTNode[]} nodes ASTNodes from the parse step
- * @param {vscode.Diagnostic[]} diagnostics - Accumulator array; parse errors are pushed here
- * @param {SymbolTable?} symbolTable - AThe symbol table
- * @returns {{
- *   sentences: import('./parser/symbol').Sentence[],
- *   symbols: import('./parser/symbol').SymbolTable
- * }} Both the parsed sentences and symbol table
+ * Wrapper for syntax to correctly capture errors.
+ * @param {import('./parser/parser').ASTNode[]} nodes
+ * @param {vscode.Diagnostic[]} diagnostics
+ * @param {SymbolTable?} existingTable
+ * @returns {{ symbolTable: SymbolTable, sentences: import('./parser/sentence').Sentence[] }}
  */
-function syntaxWrapper(nodes, diagnostics, symbolTable) {
-    const { symbolTable, errors, syntax: sentences } = syntax(nodes, symbolTable);
+function syntaxWrapper(nodes, diagnostics, existingTable) {
+    const { symbolTable, errors, syntax: sentences } = syntax(nodes, existingTable);
     for (const e of errors) {
-        const pos = new vscode.Position(e.lineStart, e.colStart);
-        const endPos = e.lineEnd ? pos.translate(0, 1) : new vscode.Position(e.lineEnd, e.colEnd);
+        const pos = new vscode.Position(e.lineStart ?? 0, e.colStart ?? 0);
+        const endPos = e.lineEnd != null
+            ? new vscode.Position(e.lineEnd, e.colEnd ?? 0)
+            : pos.translate(0, 1);
         diagnostics.push(new vscode.Diagnostic(
             new vscode.Range(pos, endPos),
             e.details || e.message,
             vscode.DiagnosticSeverity.Error
         ));
     }
-    return { symbols: symbolTable, sentences };
+    return { symbolTable, sentences };
 }
 
-/** 
- * Wrapper for semantics to correctly capture errors
- * @param {import('./parser/symbol').Sentence[]} sentences An array of sentences from syntax step
- * @param {import('./parser/symbol').SymbolTable} symbolTable The symbol table generated from the syntax step
- * @param {vscode.Diagnostic[]} diagnostics - Accumulator array; parse errors are pushed here
- * @returns {{ [name: string]: import('./parser/semantics').Term }} The terms parsed
+/**
+ * Run the semantics pass — builds Term objects on the symbolTable (sym.forward is set).
+ * @param {import('./parser/symbol').SymbolTable} symbolTable
+ * @param {vscode.Diagnostic[]} diagnostics
+ * @returns {{ [name: string]: import('./parser/term').Term }}
  */
 function semanticsWrapper(symbolTable, diagnostics) {
-    const { terms, errors } = semantics(symbolTable);
+    const {terms: termMap, errors } = rawSemantics(symbolTable);
+    const terms = {};
+    for (const [name, sym] of Object.entries(symbolTable.symbols)) {
+        const term = termMap.get(sym);
+        if (term) terms[name] = term;
+    }
     for (const e of errors) {
-        const { startCol, startLine, endCol, endLine } = e.getRange();
+        const {startLine, startCol, endLine, endCol} = e.getRange();
         const pos = new vscode.Position(startLine, startCol);
         const endPos = new vscode.Position(endLine, endCol);
         diagnostics.push(new vscode.Diagnostic(
@@ -244,28 +272,221 @@ function semanticsWrapper(symbolTable, diagnostics) {
 }
 
 /**
- * Perform full preparsing of the files in all the KBs and their constituents,
- * then compile the definitions from the AST nodes.
- *
- * Uses the logic in parser/ to construct a full list of terms. This method
- *  will reconstruct everything clearing the term cache 
+ * Recursively build Formula objects for a sentence and all nested sentences.
+ * @param {import('./parser/sentence').Sentence} sentence
  */
-async function buildWorkspaceDefinitions() {
-    // Get all knowledge bases
+function buildFormulaTree(sentence) {
+    new Formula(sentence);
+    for (const t of sentence.terms) {
+        if (t instanceof Sentence) {
+            buildFormulaTree(t);
+        }
+    }
+}
+
+/**
+ * Build Formula objects for every root sentence in the symbol table.
+ * Must be called after semanticsWrapper so that sym.forward is set.
+ * @param {SymbolTable} symbolTable
+ */
+function buildFormulas(symbolTable) {
+    for (const s of symbolTable.sentences) {
+        buildFormulaTree(s);
+    }
+}
+
+/**
+ * Call Formula.validate() (which cascades into Term.validate()) for every
+ * root sentence that belongs to `fsPath`. Converts SemanticErrors to
+ * VS Code Error diagnostics.
+ * @param {SymbolTable} symbolTable
+ * @param {string} fsPath
+ * @param {vscode.Diagnostic[]} diagnostics
+ */
+function validateSemantics(symbolTable, fsPath, diagnostics) {
+    for (const sentence of symbolTable.sentences) {
+        if (sentence.node?.file !== fsPath) continue;
+        const formula = sentence.forward || new Formula(sentence);
+        if (!formula) continue;
+
+        // For non-operator sentences, only validate when the head symbol has
+        // at least one taxonomy declaration in this KB.  If it has none, the
+        // symbol is completely unknown here (e.g. a SUMO built-in declared in
+        // another file) and we cannot distinguish "wrong type" from "not yet
+        // declared" — skip rather than emit a false positive.
+        if (!(sentence instanceof OperatorSentence)) {
+            const headForward = sentence.terms[0]?.forward;
+            if (!headForward) continue;
+            const { incoming, outgoing } = headForward.taxonomy;
+            if (incoming.length === 0 && outgoing.length === 0) continue;
+        }
+
+        try {
+            formula?.validate();
+        } catch (e) {
+            let range;
+            try {
+                const { startLine, startCol, endLine, endCol } = e.getRange();
+                range = new vscode.Range(
+                    new vscode.Position(startLine, startCol),
+                    new vscode.Position(endLine, endCol)
+                );
+            } catch (_) {
+                range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 1));
+            }
+            diagnostics.push(new vscode.Diagnostic(range, e.details || e.message, vscode.DiagnosticSeverity.Error));
+        }
+    }
+}
+
+const TAXONOMY_PREDICATES = new Set(['subclass', 'instance', 'subAttribute', 'subrelation']);
+
+/**
+ * Build a taxonomy cache entry by scanning sentences for a specific file.
+ * O(sentences_in_file) rather than O(all_terms × all_sentences).
+ * @param {SymbolTable} symbolTable
+ * @param {string} fsPath  Only include sentences from this file
+ * @returns {{ relations: object[], docs: object[] }}
+ */
+function termsToTaxonomy(symbolTable, fsPath) {
+    const relations = [];
+    const docs = [];
+    for (const sentence of symbolTable.sentences) {
+        if (sentence.node.file !== fsPath) continue;
+        const terms = sentence.terms;
+        if (!terms.length) continue;
+        const pred = terms[0]?.name;
+        if (!pred) continue;
+
+        if (TAXONOMY_PREDICATES.has(pred) && terms.length >= 3) {
+            const child = terms[1]?.name;
+            const parent = terms[2]?.name;
+            if (child && parent) relations.push({ type: pred, child, parent });
+        } else if (pred === 'documentation' && terms.length >= 4) {
+            const symbol = terms[1]?.name;
+            const lang = terms[2]?.name;
+            const raw = terms[3]?.value ?? terms[3]?.name ?? '';
+            const text = (raw.startsWith('"') && raw.endsWith('"'))
+                ? raw.slice(1, -1) : raw;
+            if (symbol && lang) docs.push({ symbol, lang, text });
+        }
+    }
+    return { relations, docs };
+}
+
+/**
+ * Aggregate all per-file taxonomy caches into a workspace-wide taxonomy.
+ * @returns {{ parents: object, children: object, documentation: object }}
+ */
+function getWorkspaceTaxonomy() {
+    const parentGraph = {};
+    const childGraph = {};
+    const docMap = {};
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('general.language') || 'EnglishLanguage';
+
+    for (const fsPath in (taxonomyCache[currentKB] || {})) {
+        const { relations, docs } = taxonomyCache[currentKB][fsPath];
+        for (const r of relations) {
+            if (!parentGraph[r.child]) parentGraph[r.child] = [];
+            if (!parentGraph[r.child].some(p => p.name === r.parent && p.type === r.type)) {
+                parentGraph[r.child].push({ name: r.parent, type: r.type });
+            }
+            if (!childGraph[r.parent]) childGraph[r.parent] = [];
+            if (!childGraph[r.parent].some(c => c.name === r.child && c.type === r.type)) {
+                childGraph[r.parent].push({ name: r.child, type: r.type });
+            }
+        }
+        for (const d of docs) {
+            if (!docMap[d.symbol] || d.lang === targetLang || docMap[d.symbol].lang !== targetLang) {
+                docMap[d.symbol] = { text: d.text, lang: d.lang };
+            }
+        }
+    }
+
+    const documentation = {};
+    for (const [s, d] of Object.entries(docMap)) {
+        documentation[s] = d.text;
+    }
+
+    return { parents: parentGraph, children: childGraph, documentation };
+}
+
+/**
+ * Aggregate hover/completion metadata (domains and documentation) across all files.
+ * @returns {{ [symbol: string]: { domains: {[pos: number]: string}, documentation: string, docLang: string } }}
+ */
+function getWorkspaceMetadata() {
+    if (workspaceMetadataCache[currentKB]) return workspaceMetadataCache[currentKB];
+
+    const combined = {};
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('general.language') || 'EnglishLanguage';
+    const kbTable = _symbolTables[currentKB];
+    if (!kbTable) return combined;
+
+    for (const [name, sym] of Object.entries(kbTable.symbols)) {
+        if (!sym.forward) continue;
+        const term = sym.forward;
+        combined[name] = { domains: {}, documentation: '', docLang: '' };
+        const entry = combined[name];
+
+        try {
+            const domain = term.domain;
+            if (domain) {
+                for (let i = 1; i < domain.length; i++) {
+                    if (domain[i]) entry.domains[i] = domain[i].name;
+                }
+            }
+        } catch (_) {
+            // Malformed domain statement — skip domain info for this term
+        }
+
+        for (const { language, text } of term.documentation) {
+            let docText = text;
+            if (docText.startsWith('"') && docText.endsWith('"')) {
+                docText = docText.substring(1, docText.length - 1);
+            }
+            if (!entry.documentation || language === targetLang || entry.docLang !== targetLang) {
+                entry.documentation = docText;
+                entry.docLang = language;
+            }
+        }
+    }
+
+    workspaceMetadataCache[currentKB] = combined;
+    return combined;
+}
+
+/**
+ * Perform full preparsing of the files in all the KBs and their constituents,
+ * then compile the definitions from the AST nodes. This method will reconstruct
+ * everything, clearing the term cache.
+ * @param {{ report: (value: { message?: string }) => void } | undefined} progress
+ *   Optional VS Code progress reporter. When provided, reports "n/total" after
+ *   each file is processed.
+ */
+async function buildWorkspaceDefinitions(progress) {
     const kbs = await getKBs();
 
-    // Reset all caches so stale data from removed files does not persist.
     clearTerms();
-    _symbolTable = new SymbolTable();
+    _symbolTables = {};
+    taxonomyCache = {};
+    workspaceMetadataCache = {};
 
-    // Run parsing against all KBs and all files in all KBs
+    // Pre-collect all files so we can show an accurate total in the progress message.
+    const kbFiles = [];
     for (const kb of kbs) {
         const files = await getKBFiles(kb);
+        kbFiles.push({ kb, files });
         terms[kb] = {};
+        _symbolTables[kb] = new SymbolTable();
+    }
+    const total = kbFiles.reduce((sum, { files }) => sum + files.length, 0);
+    let done = 0;
+
+    for (const { kb, files } of kbFiles) {
         for (const file of files) {
             try {
                 const doc = await vscode.workspace.openTextDocument(file);
-                // Update that file
                 updateFileDefinitions(doc, kb);
             } catch (e) {
                 vscode.window.showErrorMessage(
@@ -273,63 +494,63 @@ async function buildWorkspaceDefinitions() {
                 );
                 console.error(e);
             }
+            done++;
+            if (progress) progress.report({ message: `${done}/${total} files` });
         }
     }
 }
 
 /**
  * Parse a document, run all validation passes, and update the workspace definition index.
- * This is the single entry point for processing a file — it replaces the separate
- * tokenize/parse calls that previously existed alongside validation.js.
- *
- * Diagnostics from both parsing (ParsingError, TokenizerError) and validation
- * (logic structure, arity, variable scoping) are collected in one pass and
- * written to the diagnostic collection together.
+ * This is the single entry point for processing a file.
  *
  * @param {vscode.TextDocument} document
  * @param {string | undefined} kb  The knowledge base this document belongs to.
- *   If omitted, the function attempts to infer it from the current state.
  */
 function updateFileDefinitions(document, kb = undefined) {
     const fsPath = document.uri.fsPath;
     const text = document.getText();
 
-    // Clear the diagnotics for that particular file
     if (diagnosticCollection) diagnosticCollection.delete(document.uri);
 
     if (!kb) {
         if (!currentKB) {
-            throw new Error("SUMO Knowledge Base is currently undefined");
+            return;  // No KB context yet — skip validation until a KB is opened
         }
         kb = currentKB;
     }
-    // The full pipeline runs here and the results are cached at the module level.
-    // Other consumers (getWorkspaceTaxonomy, getWorkspaceMetadata, the taxonomy
-    // view, etc.) read from those caches without re-running the compiler.
 
-    // Array to hold errors to show to the user
+    // Ensure a SymbolTable exists for this KB (handles files saved before buildWorkspaceDefinitions)
+    if (!_symbolTables[kb]) _symbolTables[kb] = new SymbolTable();
+
     const diagnostics = [];
     try {
-        // Generate tokens
-        const tokens = tokenizeWrapper({text, path: fsPath}, diagnostics);
-        const ast = parseWrapper(tokens, diagnostics);
-        const { sentences, symbolTable } = syntaxWrapper(ast, diagnostics, _symbolTable);
-        _symbolTable = symbolTable;
-        const terms = semanticsWrapper(_symbolTable, diagnostics)
-        setTerms(kb, terms);
+        // Remove stale data from this file before re-parsing
+        _symbolTables[kb].removeFile(fsPath);
 
-        // --- Run validation passes directly against the terms ---
-        ast.forEach(node => validateNode(node, diagnostics, terms, document));
-        validateVariables(ast, diagnostics);
-        validateArity(ast, diagnostics, terms, document);
-        validateRelationArity(ast, diagnostics, terms, document, getWorkspaceTaxonomy());
-        validateDomainTypes(ast, diagnostics, terms, document, getWorkspaceTaxonomy());
-        validateRelationUsage(ast, diagnostics, document);
-        validateCoverage(ast, diagnostics, terms, document, getWorkspaceTaxonomy());
+        const tokens = tokenizeWrapper({ text, path: fsPath }, diagnostics);
+        const ast = parseWrapper(tokens, diagnostics);
+        const { symbolTable } = syntaxWrapper(ast, diagnostics, _symbolTables[kb]);
+        _symbolTables[kb] = symbolTable;
+
+        const fileTerms = semanticsWrapper(_symbolTables[kb], diagnostics);
+        setTerms(kb, fileTerms);
+
+        // Build Formula objects and run semantic validation
+        buildFormulas(_symbolTables[kb]);
+        validateSemantics(_symbolTables[kb], fsPath, diagnostics);
+
+        // Update taxonomy cache and invalidate this KB's metadata cache
+        if (!taxonomyCache[kb]) taxonomyCache[kb] = {};
+        taxonomyCache[kb][fsPath] = termsToTaxonomy(_symbolTables[kb], fsPath);
+        delete workspaceMetadataCache[kb];
+
+        // Run best-practice and dependency warnings (lazy import avoids circular require)
+        const { validateBestPractices, validateFileDependencies } = require('./validation');
+        validateBestPractices(_symbolTables[kb], document, diagnostics);
+        // Pass only this KB's symbol table so cross-KB file edges are never flagged
+        validateFileDependencies(_symbolTables[kb], document, diagnostics);
     } catch (e) {
-        // Unexpected error
-        // Add a best-effort diagnostic and log for debugging.
-        // console.error(`Error processing ${fsPath}:`, e);
         const line = e.line !== undefined ? e.line : 0;
         const col = e.col !== undefined ? e.col : (e.column !== undefined ? e.column : 0);
         diagnostics.push(new vscode.Diagnostic(
@@ -346,7 +567,6 @@ function updateFileDefinitions(document, kb = undefined) {
             diagnosticCollection.delete(document.uri);
         }
     }
-    workspaceMetadataCache = null;
 }
 
 module.exports = {
@@ -359,5 +579,13 @@ module.exports = {
     setTerms,
     getTerms,
     clearTerms,
-    buildWorkspaceDefinitions
+    getSymbolTable,
+    buildWorkspaceDefinitions,
+    updateFileDefinitions,
+    getWorkspaceTaxonomy,
+    getWorkspaceMetadata,
+    tokenize: tokenizeWrapper,
+    parse: parseWrapper,
+    syntax: syntaxWrapper,
+    semantics: semanticsWrapper
 };

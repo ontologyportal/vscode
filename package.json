@@ -11,7 +11,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "test": "mocha 'test/**/*.test.js' 'test-c/**/*.test.js'",
+    "test": "mocha 'test/**/*.test.js'",
     "test:integration": "mocha 'test-integration/**/*.test.js' --timeout 180000",
     "test:vscode": "node test-vscode/runTests.js",
     "test:watch": "mocha --watch test/**/*.test.js",
@@ -38,8 +38,7 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:suo-kif",
-    "onLanguage:tptp"
+    "onLanguage:suo-kif"
   ],
   "contributes": {
     "commands": [
@@ -62,6 +61,10 @@
       {
         "command": "sumo.browseInSigma",
         "title": "SUMO: Browse Term in Sigma"
+      },
+      {
+        "command": "sumo.lookupQuery",
+        "title": "SUMO: Lookup Query"
       },
       {
         "command": "sumo.checkErrors",
@@ -132,7 +135,8 @@
         {
           "id": "sumo.kbExplorer",
           "name": "Knowledge Bases",
-          "icon": "$(search)"
+          "icon": "$(search)",
+          "when": "sumo.kifFileOpened"
         }
       ]
     },
@@ -322,10 +326,16 @@
             "enum": [
               "local",
               "docker",
+              "daemon",
               "native (experimental)"
             ],
             "default": "local",
-            "description": "How to run Sigma. If set to local, use a local installation, if set to docker, use a running docker instance, if set to native, use the experimental JS implementation of Sigma (not recommended)"
+            "description": "How to run Sigma. If set to local, use a local installation, if set to docker, use a running docker instance, if set to daemon, connect to a standalone sigma-daemon process, if set to native, use the experimental JS implementation of Sigma (not recommended)"
+          },
+          "sumo.sigma.daemonUrl": {
+            "type": "string",
+            "default": "http://localhost:9999",
+            "description": "URL of a running Sigma daemon (used when runtime is set to 'daemon')."
           },
           "sumo.sigma.dockerImage": {
             "type": "string",

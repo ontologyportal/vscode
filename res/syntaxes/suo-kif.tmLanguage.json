@@ -62,7 +62,7 @@
           "match": "\\b(forall|exists)\\b"
         },
         {
-          "name": "keyword.operator.comparison.suo-kif",
+          "name": "keyword.control.logic.suo-kif",
           "match": "\\b(equal)\\b"
         }
       ]

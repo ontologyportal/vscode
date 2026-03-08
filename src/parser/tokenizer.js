@@ -3,17 +3,17 @@
  * Converts SUMO source text into a stream of tokens
  */
 
+// Pre-computed Sets for O(1) character/operator classification.
+// The getters in the old charSet allocated new arrays on every access;
+// these are computed once at module load time.
+const _alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const charSet = {
-    upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
-    lower: 'abcdefghijklmnopqrstuvwxyz'.split(''),
-    digit: '0123456789'.split(''),
-    special: '!$%&*+-.,#/<=>?@_~;:\\()\'{}[]`'.split(''),
-    white: ' \t\r\n\f'.split(''),
-    get initialChar() { return this.upper.concat(this.lower) },
-    get wordChar() { return this.upper.concat(this.lower, this.digit, ['-', '_']) },
-    get character() { return this.upper.concat(this.lower, this.digit, this.special, this.white) },
-    operators: [ 'and', 'or', 'not', 'exists', 'forall', '=>', '<=>', 'equal' ]
-}
+    initialChar: new Set(_alpha),
+    operators: new Set([ 'and', 'or', 'not', 'exists', 'forall', '=>', '<=>', 'equal' ]),
+};
+
+// Pre-compiled number regex — avoids re-compiling on every token.
+const NUMBER_RE = /^-?\d+(\.\d+)?(e-?\d+)?$/i;
 
 const TokenType = {
     LPAREN: 'LPAREN',
@@ -89,8 +89,9 @@ function tokenize(text, file = 'unknown') {
             const line = lines[row];
             const len = line.length;
     
-            // Skip whitespace
-            if (/\s/.test(char)) {
+            // Skip whitespace — char <= ' ' covers space, tab, CR, LF, FF
+            // and is measurably faster than a regex test in a tight loop.
+            if (char <= ' ') {
                 offset++;
                 continue;
             }
@@ -176,7 +177,7 @@ function tokenize(text, file = 'unknown') {
             const start = offset;
             const startCol = col;
             // Consume until you hit the end of the line, whitespace, a parenthesis or a quote
-            while (col < len && !/\s/.test(line[col]) && line[col] !== '(' && line[col] !== ')' && line[col] !== '"') {
+            while (col < len && line[col] > ' ' && line[col] !== '(' && line[col] !== ')' && line[col] !== '"') {
                 col++;
                 offset++;
             }
@@ -186,11 +187,11 @@ function tokenize(text, file = 'unknown') {
             // Determine token type
             let type = TokenType.ATOM;
 
-            if (/^-?\d+(\.\d+)?(e-?\d+)?$/i.test(value)) {
+            if (NUMBER_RE.test(value)) {
                 type = TokenType.NUMBER;
             } else if (value.startsWith('?')) {
                 type = TokenType.VARIABLE;
-                if (!charSet.initialChar.includes(value.at(1))) {
+                if (!charSet.initialChar.has(value.at(1))) {
                     errors.push(new TokenizerError(
                         row, startCol,
                         `Variable name must start with a letter after '?': ${value}`,
@@ -199,16 +200,16 @@ function tokenize(text, file = 'unknown') {
                 }
             } else if (value.startsWith('@')) {
                 type = TokenType.ROW_VARIABLE;
-                if (!charSet.initialChar.includes(value.at(1))) {
+                if (!charSet.initialChar.has(value.at(1))) {
                     errors.push(new TokenizerError(
                         row, startCol,
                         `Row variable name must start with a letter after '@': ${value}`,
                         file
                     ));
                 }
-            } else if (charSet.operators.includes(value)) {
+            } else if (charSet.operators.has(value)) {
                 type = TokenType.OPERATOR;
-            } else if (charSet.initialChar.includes(value.at(0))) {
+            } else if (charSet.initialChar.has(value.at(0))) {
                 type = TokenType.ATOM;
             } else {
                 errors.push(new TokenizerError(

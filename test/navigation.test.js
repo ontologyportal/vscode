@@ -24,26 +24,39 @@ function parseKIF(text) {
 // ---------------------------------------------------------------------------
 function loadNavigation(configValues, overrides) {
     const vscode = createVSCodeMock(sinon);
+    vscode['@global'] = true;
     vscode._setConfig(configValues || { 'general.language': 'EnglishLanguage' });
+
+    const sigmaConfigStub = {
+        findConfigXml: sinon.stub().resolves(null),
+        parseConfigXml: sinon.stub().resolves(null)
+    };
 
     const realValidation = proxyquire('../src/validation', {
         vscode,
         './parser': realParser
     });
 
+    const realState = proxyquire('../src/state', {
+        vscode,
+        './parser': realParser,
+        './parser/formula': require('../src/parser/formula'),
+        './parser/sentence': require('../src/parser/sentence'),
+        './validation': realValidation,
+        './sigma/config': sigmaConfigStub
+    });
+
     const mod = proxyquire('../src/navigation', {
         vscode,
         './parser': realParser,
         './validation': realValidation,
+        './state': realState,
         './const': require('../src/const'),
         './sigma': {
             findConfigXml: sinon.stub().resolves(null),
             getSigmaRuntime: sinon.stub().returns({})
         },
-        './sigma/config': {
-            findConfigXml: sinon.stub().resolves(null),
-            parseConfigXml: sinon.stub().resolves(null)
-        },
+        './sigma/config': sigmaConfigStub,
         ...overrides
     });
 
@@ -56,6 +69,7 @@ function loadNavigation(configValues, overrides) {
  */
 function setupNavForBuild(parseConfigStub, docMap) {
     const vscodeMock = createVSCodeMock(sinon);
+    vscodeMock['@global'] = true;
     vscodeMock._setConfig({ 'general.language': 'EnglishLanguage' });
 
     // Accept all paths in docMap as "existing" files
@@ -76,11 +90,25 @@ function setupNavForBuild(parseConfigStub, docMap) {
         './parser': realParser
     });
 
+    const realState = proxyquire('../src/state', {
+        vscode: vscodeMock,
+        fs: mockFs,
+        './parser': realParser,
+        './parser/formula': require('../src/parser/formula'),
+        './parser/sentence': require('../src/parser/sentence'),
+        './validation': realValidation,
+        './sigma/config': {
+            findConfigXml: sinon.stub().resolves('/test/config.xml'),
+            parseConfigXml: parseConfigStub
+        }
+    });
+
     const mod = proxyquire('../src/navigation', {
         vscode: vscodeMock,
         fs: mockFs,
         './parser': realParser,
         './validation': realValidation,
+        './state': realState,
         './const': require('../src/const'),
         './sigma': {
             findConfigXml: sinon.stub().resolves('/test/config.xml'),
@@ -332,6 +360,7 @@ describe('navigation.js', function () {
             parseConfigStub.onCall(3).resolves(onlyA);     // second build: getKBFiles()
 
             const { mod } = setupNavForBuild(parseConfigStub, docMap);
+            mod.setKB('SUMO');
 
             await mod.buildWorkspaceDefinitions();
             expect(mod.getWorkspaceMetadata()).to.have.property('onlyInB'); // sanity: first build loaded b.kif

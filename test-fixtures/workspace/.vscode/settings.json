@@ -2,5 +2,6 @@
     "sumo.general.language": "EnglishLanguage",
     "sumo.general.formatIndentSize": 2,
     "sumo.sigma.runtime": "local",
-    "sumo.sigma.enforceKBContext": false
+    "sumo.sigma.enforceKBContext": false,
+    "sumo.theoremProver.path": ""
 }

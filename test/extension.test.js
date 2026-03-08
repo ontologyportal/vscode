@@ -60,10 +60,9 @@ describe('extension.js - import / wiring checks', function () {
             }
         });
 
-        it('extension.js activate function registers document change listeners', function () {
+        it('extension.js activate function registers document open and save listeners', function () {
             const source = fs.readFileSync(EXTENSION_SRC, 'utf-8');
             expect(source).to.include('onDidOpenTextDocument');
-            expect(source).to.include('onDidChangeTextDocument');
             expect(source).to.include('onDidSaveTextDocument');
         });
 

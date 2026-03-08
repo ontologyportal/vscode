@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { getSigmaRuntime, getSigmaHome } = require('./sigma');
 const { getKB } = require('./navigation');
-const { tokenize, parse, validateNode, validateVariables, analyse } = require('./validation');
+const { tokenize, parse, validateNode, validateVariables, analyse, syntax, semantics } = require('./validation');
 
 /**
  * A basic Pseudoterminal implementation for SUMO Ask/Tell interaction
@@ -481,7 +481,8 @@ class SumoReplTerminal {
             };
             const ast = parse(tokens, diagnostics);
             if (ast.length > 0) {
-                const terms = analyse(ast);
+                const {symbolTable} = syntax(ast, diagnostics);
+                semantics(symbolTable, diagnostics);
                 ast.forEach(node => validateNode(node, diagnostics, terms, mockDoc));
                 validateVariables(ast, diagnostics);
             }

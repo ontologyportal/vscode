@@ -41,14 +41,14 @@ const NodeType = {
     ROW_VARIABLE: 'row_variable'
 };
 
-const termNodeTypes = [
+const termNodeTypes = new Set([
     NodeType.ATOM,
     NodeType.OPERATOR,
     NodeType.STRING,
     NodeType.NUMBER,
     NodeType.VARIABLE,
     NodeType.ROW_VARIABLE
-];
+]);
 
 /**
  * Track AST Nodes
@@ -78,7 +78,6 @@ class ASTNode {
 
 class ASTListNode extends ASTNode {
     /**
-     * @param {NodeType} type The type of node to create
      * @param {Token} token The token to generate the node from
      */
     constructor(token) {
@@ -127,7 +126,7 @@ class ASTTermNode extends ASTNode {
      * @param {Token} token The token to generate the node from
      */
     constructor(type, token) {
-        if (!termNodeTypes.includes(type))
+        if (!termNodeTypes.has(type))
             throw new Error("Cannot create ASTTermNode from non-term node");
         super(type, token);
     }
@@ -277,66 +276,6 @@ class TokenList {
     }
 }
 
-// /**
-//  * Collect all free variables in a formula
-//  * @param {ASTNode} node - AST node
-//  * @param {Set} boundVars - Set of currently bound variables
-//  * @returns {Set} Set of free variable names
-//  */
-// function collectFreeVariables(node, boundVars = new Set()) {
-//     const freeVars = new Set();
-
-//     /**
-//      * 
-//      * @param {ASTNode} n The node 
-//      * @param {Set<Token>} bound The bound variables 
-//      * @returns 
-//      */
-//     function visit(n, bound) {
-//         if (!n) return;
-
-//         if (n.type === NodeType.VARIABLE || n.type === NodeType.ROW_VARIABLE) {
-//             if (!bound.has(n.token)) {
-//                 freeVars.add(n.token);
-//             }
-//         } else if (n.type === NodeType.LIST && n.children.length > 0) {
-//             /** @type {ASTListNode} */
-//             const listNode = n;
-//             const head = listNode.getHead();
-//             if (head.type !== NodeType.LIST) {
-
-//             }
-//             const headVal = getValue(head);
-
-//             // Handle quantifiers - they bind variables
-//             if (headVal === 'forall' || headVal === 'exists') {
-//                 if (n.children.length >= 2 && n.children[1].type === NodeType.LIST) {
-//                     const newBound = new Set(bound);
-//                     // Add quantified variables to bound set
-//                     for (const v of n.children[1].children) {
-//                         if (v.type === NodeType.VARIABLE || v.type === NodeType.ROW_VARIABLE) {
-//                             newBound.add(v.value);
-//                         }
-//                     }
-//                     // Visit body with extended bound set
-//                     for (let i = 2; i < n.children.length; i++) {
-//                         visit(n.children[i], newBound);
-//                     }
-//                     return;
-//                 }
-//             }
-
-//             // Visit all children with current bound set
-//             for (const child of n.children) {
-//                 visit(child, bound);
-//             }
-//         }
-//     }
-
-//     visit(node, boundVars);
-//     return freeVars;
-// }
-
 module.exports = {
     NodeType,
     ASTNode,
@@ -344,5 +283,4 @@ module.exports = {
     ASTTermNode,
     TokenList,
     ParsingError,
-    // collectFreeVariables
 };
