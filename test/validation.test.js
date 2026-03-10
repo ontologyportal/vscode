@@ -34,13 +34,6 @@ function parseKIF(text) {
     return new realParser.TokenList(tokens).parse().nodes;
 }
 
-// Convenience: parse KIF text to Terms
-function parseKIFTerms(text) {
-    const { symbolTable } = realParser.kif(text);
-    const { terms } = realParser.semantics(symbolTable);
-    return terms;
-}
-
 // ---------------------------------------------------------------------------
 describe('validation.js', function () {
 
@@ -69,140 +62,9 @@ describe('validation.js', function () {
         });
     });
 
-    // -----------------------------------------------------------------------
-    describe('validateNode()', function () {
-
-        it('warns when class argument of subclass starts with lowercase', function () {
-            const { mod } = loadValidation();
-            const kif = '(subclass Human primate)'; // 'primate' starts lowercase
-            const ast = parseKIF(kif);
-            const terms = parseKIFTerms(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            ast.forEach(n => mod.validateNode(n, diags, terms, doc));
-            expect(diags.some(d => d.message.includes('uppercase'))).to.be.true;
-        });
-
-        it('warns when class argument of instance starts with lowercase', function () {
-            const { mod } = loadValidation();
-            const kif = '(instance Rover dog)'; // 'dog' starts lowercase
-            const ast = parseKIF(kif);
-            const terms = parseKIFTerms(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            ast.forEach(n => mod.validateNode(n, diags, terms, doc));
-            expect(diags.some(d => d.message.includes('uppercase'))).to.be.true;
-        });
-
-        it('does not warn for well-capitalised subclass/instance', function () {
-            const { mod } = loadValidation();
-            const kif = '(subclass Cat Mammal)\n(instance Rover Dog)';
-            const ast = parseKIF(kif);
-            const terms = parseKIFTerms(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            ast.forEach(n => mod.validateNode(n, diags, terms, doc));
-            expect(diags).to.have.lengthOf(0);
-        });
-    });
-
-    // -----------------------------------------------------------------------
-    describe('validateOperand()', function () {
-
-        it('errors when a bare atom is used as logical operand', function () {
-            const { mod } = loadValidation();
-            const kif = '(and Foo Bar)'; // Foo and Bar are bare atoms, not sentences
-            const ast = parseKIF(kif);
-            const terms = parseKIFTerms(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            ast.forEach(n => mod.validateNode(n, diags, terms, doc));
-            expect(diags.some(d => d.message.includes('atom'))).to.be.true;
-        });
-
-        it('accepts a relation call as logical operand', function () {
-            const { mod } = loadValidation();
-            const kif = '(and (instance ?X Human) (instance ?X Animal))';
-            const ast = parseKIF(kif);
-            const terms = parseKIFTerms(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            ast.forEach(n => mod.validateNode(n, diags, terms, doc));
-            expect(diags).to.have.lengthOf(0);
-        });
-
-        it('errors when uppercase-head list is used as logical operand', function () {
-            const { mod } = loadValidation();
-            // (SuccessorFn 3) is a function application, not a sentence
-            const kif = '(and (instance ?X Human) (SuccessorFn 3))';
-            const ast = parseKIF(kif);
-            const terms = parseKIFTerms(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            ast.forEach(n => mod.validateNode(n, diags, terms, doc));
-            expect(diags.some(d => d.message.includes('Function or Instance'))).to.be.true;
-        });
-    });
-
-    // validateArity / validateRelationArity / validateDomainTypes / validateCoverage
-    // have been removed from validation.js — those checks are now handled by
-    // Term.validate() and Formula.validate() in the parser layer.
-
-    // -----------------------------------------------------------------------
-    describe('validateRelationUsage()', function () {
-
-        it('warns when a relation list has no arguments', function () {
-            const { mod } = loadValidation();
-            const kif = '(knows)';
-            const ast = parseKIF(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            mod.validateRelationUsage(ast, diags, doc);
-            expect(diags.some(d => d.message.includes('no arguments'))).to.be.true;
-        });
-
-        it('does not warn for logical operators with no arguments', function () {
-            const { mod } = loadValidation();
-            const kif = '(and)';
-            const ast = parseKIF(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            mod.validateRelationUsage(ast, diags, doc);
-            expect(diags).to.have.lengthOf(0);
-        });
-
-        it('does not warn for relations with arguments', function () {
-            const { mod } = loadValidation();
-            const kif = '(instance Foo Bar)';
-            const ast = parseKIF(kif);
-            const doc = createMockDocument(kif);
-            const diags = [];
-            mod.validateRelationUsage(ast, diags, doc);
-            expect(diags).to.have.lengthOf(0);
-        });
-    });
-
-    // -----------------------------------------------------------------------
-    describe('validateVariables()', function () {
-
-        it('does not crash on quantified expressions', function () {
-            const { mod } = loadValidation();
-            // NOTE: '=>' is not a valid ATOM in the tokenizer (starts with '='),
-            // so we use 'and' instead.
-            const kif = '(forall (?X ?Y) (and (instance ?X Human) (instance ?Y Animal)))';
-            const ast = parseKIF(kif);
-            const diags = [];
-            expect(() => mod.validateVariables(ast, diags)).to.not.throw();
-        });
-
-        it('does not crash on deeply nested quantifiers', function () {
-            const { mod } = loadValidation();
-            const kif = '(forall (?X) (exists (?Y) (knows ?X ?Y)))';
-            const ast = parseKIF(kif);
-            const diags = [];
-            expect(() => mod.validateVariables(ast, diags)).to.not.throw();
-        });
-    });
+    // validateNode, validateOperand, validateRelationUsage, and validateVariables
+    // have been removed from validation.js exports — those checks are now handled
+    // internally or via Term.validate() and Formula.validate() in the parser layer.
 
     // -----------------------------------------------------------------------
     describe('validateFileDependencies()', function () {

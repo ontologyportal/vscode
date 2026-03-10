@@ -28,8 +28,6 @@ class SemanticVariable extends SemanticStatement {
         super();
         /** @type {VariableSym} */
         this.variable = variable;
-
-        this.variable.forward = this;
     }
 
     /** @return {boolean} */
@@ -143,6 +141,9 @@ class SemanticVariable extends SemanticStatement {
      * [TODO] track partitions and other things
      */
 }
+
+// Set semantic type for the variable class
+VariableSym.setSemanticType(SemanticVariable);
 
 module.exports = {
     SemanticVariable

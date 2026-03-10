@@ -1,8 +1,8 @@
 const vscode = require('vscode');
-const { getWorkspaceTaxonomy } = require('./navigation');
 const path = require('path');
-const fs = require('fs');
+const { getSymbolTable } = require('./state');
 const h = require('hyperscript');
+const { Symbol, Term, TaxonomyEdge } = require('./parser');
 
 /**
  * Command subscription callback to show taxonomy window for a symbol
@@ -43,6 +43,7 @@ async function showTaxonomyCommand(context, argSymbol) {
         }
     );
 
+    // Grab the static HTML resources
     const mermaidUri = panel.webview.asWebviewUri(vscode.Uri.file(
         path.join(context.extensionPath, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js')
     ));
@@ -52,10 +53,12 @@ async function showTaxonomyCommand(context, argSymbol) {
     ));
 
     // Keep track of the view changes so the user can go back to it
+    /** @type {string[]} */
     let history = [];
     let currentIndex = -1;
 
     // Callback to update the panel
+    /** @type {(targetSymbol: string, fromHistory: boolean) => void} */
     const updateWebview = async (targetSymbol, fromHistory = false) => {
         if (!fromHistory) {
             // We are creating a new view and NOT navigating backwards
@@ -79,21 +82,30 @@ async function showTaxonomyCommand(context, argSymbol) {
         
         // Give the UI a moment to render the loading message
         await new Promise(resolve => setTimeout(resolve, 50));
-        
-        const { parents, children, documentation } = getWorkspaceTaxonomy();
-        let doc = (documentation[targetSymbol]) 
-            ? documentation[targetSymbol]
-            : "No documentation found in workspace.";
 
-        // Linkify cross-references &%SYMBOL
-        doc = doc.replace(/&%([a-zA-Z0-9_\-]+)/g, '<a href="#" onclick="openSymbol(\'$1\')">$1</a>');
+        const sym = getSymbolTable().symbols[targetSymbol];
+        if (!sym) {
+            panel.webview.html = `<!DOCTYPE html>${h('html', { lang: 'en' },
+                h('body', { style: { fontFamily: 'sans-serif', padding: '10px' } },
+                    h('h3', `Unknown symbol: ${targetSymbol}`)
+                )
+            ).outerHTML}`;
+            return;
+        }
 
         const historyState = {
             canGoBack: currentIndex > 0,
             canGoForward: currentIndex < history.length - 1
         };
 
-        panel.webview.html = generateTaxonomyHtml(targetSymbol, parents, children, doc, mermaidUri, svgPanZoomUri, panel.webview.cspSource, historyState);
+        // Get the symbol from the symbol table
+        panel.webview.html = generateTaxonomyHtml(
+            sym,
+            mermaidUri,
+            svgPanZoomUri,
+            panel.webview.cspSource,
+            historyState
+        );
     };
 
     panel.webview.onDidReceiveMessage(
@@ -126,41 +138,59 @@ async function showTaxonomyCommand(context, argSymbol) {
     updateWebview(symbol);
 }
 
-function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, mermaidUri, svgPanZoomUri, cspSource, historyState) {
+/**
+ * Generate an HTML page for a given term's taxonomy
+ * @param {Symbol} symbol 
+ * @param {string} mermaidUri 
+ * @param {string} svgPanZoomUri 
+ * @param {string} cspSource 
+ * @param {{canGoBack: boolean, canGoForward: boolean}} historyState 
+ * @returns {string} Generated HTML
+ */
+function generateTaxonomyHtml(symbol, mermaidUri, svgPanZoomUri, cspSource, historyState) {
+    const targetLang = vscode.workspace.getConfiguration('sumo').get('general.language') || 'EnglishLanguage';
     const { canGoBack, canGoForward } = historyState || { canGoBack: false, canGoForward: false };
     // Build graph data for Mermaid
-    const nodes = new Set([symbol]);
+    /** @type {Term} */
+    const term = symbol.forward;
+    /** @type {Set<Term>} */
+    const nodes = new Set([term]);
+    /** @type {TaxonomyEdge[]} */
     const edges = [];
 
     // 1. Traverse Ancestors (Upwards)
-    const queue = [symbol];
-    const visited = new Set([symbol]);
+    const queue = [term];
+    const visited = new Set([term]);
 
     while (queue.length > 0) {
+        /** @type {Term} */
         const curr = queue.shift();
-        const parents = parentGraph[curr] || [];
+        const parents = curr.taxonomy.incoming;
         parents.forEach(p => {
-            // p is { name, type }
-            const pName = p.name;
-            const type = p.type;
-            
             // Add edge: Parent -> Child
-            edges.push({ from: pName, to: curr, label: type });
-            nodes.add(pName);
+            edges.push(p);
+            nodes.add(p.from);
 
-            if (!visited.has(pName)) {
-                visited.add(pName);
-                queue.push(pName);
+            if (!visited.has(p.from)) {
+                visited.add(p.from);
+                queue.push(p.from);
             }
         });
     }
 
     // 2. Direct Children (Downwards)
-    const children = childGraph[symbol] || [];
-    children.forEach(c => {
-        edges.push({ from: symbol, to: c.name, label: c.type });
-        nodes.add(c.name);
-    });
+    // const children = childGraph[symbol] || [];
+    // children.forEach(c => {
+    //     edges.push({ from: symbol, to: c.name, label: c.type });
+    //     nodes.add(c.name);
+    // });
+
+    // Get documentation
+    let documentation = term.documentation.find(d => d.language === targetLang)?.text
+        ?? "No documentation found in workspace.";
+
+    // Linkify cross-references &%SYMBOL
+    documentation = documentation.replace(/&%([a-zA-Z0-9_\-]+)/g, '<a href="#" onclick="openSymbol(\'$1\')">$1</a>');
 
     // Generate Mermaid String
     let mermaidGraph = 'graph TD\n';
@@ -168,14 +198,14 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
     mermaidGraph += 'classDef target fill:#0e639c,stroke:#007acc,stroke-width:2px,color:#fff;\n';
     
     nodes.forEach(n => {
-        const className = (n === symbol) ? 'target' : 'default';
+        const className = (n === term) ? 'target' : 'default';
         // We use the symbol itself as ID.
-        mermaidGraph += `${n}["${n}"]:::${className}\n`;
-        mermaidGraph += `click ${n} callOpenSymbol\n`;
+        mermaidGraph += `${n.name}["${n.name}"]:::${className}\n`;
+        mermaidGraph += `click ${n.name} callOpenSymbol\n`;
     });
 
     edges.forEach(e => {
-        mermaidGraph += `${e.from} -->|${e.label}| ${e.to}\n`;
+        mermaidGraph += `${e.from.name} -->|${e.relation}| ${e.to.name}\n`;
     });
 
     return `
@@ -230,7 +260,7 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
                 <button class="nav-btn" onclick="goBack()" ${canGoBack ? '' : 'disabled'}>&larr; Back</button>
                 <button class="nav-btn" onclick="goForward()" ${canGoForward ? '' : 'disabled'}>Forward &rarr;</button>
             </div>
-            <h1>Taxonomy: ${symbol}</h1>
+            <h1>Taxonomy: ${symbol.name}</h1>
             ${documentation ? `<div class="doc-block">${documentation}</div>` : ''}
             
             <div class="mermaid">
@@ -295,35 +325,7 @@ function generateTaxonomyHtml(symbol, parentGraph, childGraph, documentation, me
     `;
 }
 
-/**
- * Convert a terms map (from semantics()) to the parent/child graph format
- * expected by generateTaxonomyHtml and getWorkspaceTaxonomy().
- *
- * @param {{ [name: string]: import('./parser/term').Term }} terms
- * @returns {{
- *   parents:  { [child:  string]: { name: string, type: string }[] },
- *   children: { [parent: string]: { name: string, type: string }[] }
- * }}
- */
-function termsToGraphs(terms) {
-    const parents  = {};
-    const children = {};
-    for (const term of Object.values(terms)) {
-        const name = term.name;
-        for (const edge of term.taxonomy.incoming) {
-            if (!parents[name]) parents[name] = [];
-            parents[name].push({ name: edge.from.name, type: edge.relation });
-        }
-        for (const edge of term.taxonomy.outgoing) {
-            if (!children[name]) children[name] = [];
-            children[name].push({ name: edge.to.name, type: edge.relation });
-        }
-    }
-    return { parents, children };
-}
-
 module.exports = {
     showTaxonomyCommand,
     generateTaxonomyHtml,
-    termsToGraphs,
 };

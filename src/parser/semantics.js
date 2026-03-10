@@ -7,7 +7,7 @@ class SemanticStatement {
      * Validate a semantic statement
      * @returns {boolean}
      */
-    validate() { }
+    validate() { return true; }
 }
 
 module.exports = {

@@ -10,13 +10,13 @@ function provideHover(document, position, token) {
     if (meta) {
         const md = new vscode.MarkdownString();
         if (meta.documentation) {
-            md.appendMarkdown(meta.documentation);
+            md.appendMarkdown(meta.documentation.replace(/&%([a-zA-Z0-9_\-]+)/g, "**$1**"));
         }
         if (meta.domains && Object.keys(meta.domains).length > 0) {
             if (meta.documentation) md.appendMarkdown('\n\n---\n\n');
             const types = Object.entries(meta.domains)
                 .sort(([a], [b]) => parseInt(a) - parseInt(b))
-                .map(([p, t]) => `**Arg ${p}**: \`${t}\``)
+                .map(([p, t]) => `**Arg ${parseInt(p) + 1}**: \`${t}\``)
                 .join('  \n');
             md.appendMarkdown(types);
         }

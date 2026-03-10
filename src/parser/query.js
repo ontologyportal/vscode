@@ -329,6 +329,177 @@ let lookupProxy = {
     }
 }
 
+// Shared empty Set used when an index lookup finds no bucket.
+// Frozen so no one accidentally mutates it.
+const EMPTY_SET = Object.freeze(new Set());
+
+/**
+ * A single-term wildcard QueryFunction used as the leading step in
+ * index-optimised proxies.  When the head term has already been filtered by
+ * the index, this consumes it so that subsequent user steps align to terms[1],
+ * terms[2], etc. — exactly what compareSym would have done, minus the filter.
+ * @type {QueryFunction}
+ */
+const SKIP_HEAD = (_ctx) => 1;
+
+/**
+ * Create the initial lookup proxy for a SymbolTable.
+ *
+ * Supports two indexing levels controlled by the `index2` parameter:
+ *
+ *   Level 1 — head-predicate index (always active):
+ *     `lookup.subclass` → proxy over only the ~800 subclass sentences
+ *     instead of scanning all 5,000+.
+ *
+ *   Level 2 — argument-position index (when index2 is non-null):
+ *     After a level-1 lookup, the returned proxy tracks which predicates
+ *     were selected and intercepts the *next* named-symbol step too.
+ *     `lookup.subclass.Human` → proxy over the 1-3 sentences where
+ *     terms[1] === "Human", instead of scanning all 800 subclass sentences.
+ *     `lookup._ANY(tRels)._SYM_.Animal` → proxy over the 1-3 sentences
+ *     where terms[2] === "Animal" across all taxonomy relations.
+ *
+ *   Queries whose first step is a wildcard (_SYM_, $_, _OP, _L, _S, …)
+ *   fall through to the standard lookupProxy and scan all sentences.
+ *
+ * @param {Set<import('./sentence').Sentence>} sentences  The full sentence set
+ * @param {Map<string, Set<import('./sentence').Sentence>>} index
+ *   Head-symbol name → Set of root sentences with that predicate.
+ * @param {Map<string, {a1: Map<string,Set>, a2: Map<string,Set>}>|null} index2
+ *   Deep argument index: predicate → { a1: terms[1]→Set, a2: terms[2]→Set }.
+ *   Pass null to disable level-2 indexing.
+ * @returns {Proxy}
+ */
+function createIndexedLookup(sentences, index, index2) {
+    // ── shared query prefixes ────────────────────────────────────────────────
+    // SKIP_HEAD × N means "N head/arg positions already filtered by the index;
+    // skip them so subsequent user steps address the correct term slot."
+    const SKIPPED_1 = [[SKIP_HEAD]];           // after level-1 lookup
+    const SKIPPED_2 = [[SKIP_HEAD, SKIP_HEAD]]; // after level-2 lookup
+
+    // ── level-2 aware handler ────────────────────────────────────────────────
+    // Used for proxies that emerged from a level-1 (or _ANY) lookup and
+    // therefore know which predicates their sentences came from.  This handler
+    // intercepts named-symbol steps and uses index2 to narrow the bucket
+    // further.  It also overrides stack() to propagate the predicate context
+    // through wildcard steps (so lookup._ANY(rels)._SYM_.name still works).
+    const predicateHandler = {
+        ...lookupProxy,
+        /** @type {string[]|null} Which predicates are represented in this proxy */
+        predicates: null,
+
+        /**
+         * Override stack() so that the `predicates` context survives wildcard
+         * steps (e.g. ._SYM_) between the level-1 and level-2 lookups.
+         */
+        stack(target, ops) {
+            let query;
+            if (this.query.length === 1 && ops.length === 1) {
+                query = [this.query[0].concat(ops[0])];
+            } else {
+                query = this.query.flatMap(q => ops.map(o => q.concat(o)));
+            }
+            // Preserve predicates in the next proxy so level-2 can still fire.
+            return new Proxy(target, {
+                ...predicateHandler,
+                predicates: this.predicates,
+                query,
+                debug: this.debug,
+            });
+        },
+
+        get(target, prop) {
+            if (typeof prop !== 'string') return target[prop];
+            if (prop === '$query') return this.query;
+            if (prop === '$' || prop === '_$') {
+                return lookupProxy.get.call(this, target, prop);
+            }
+
+            // ── level-2 lookup ───────────────────────────────────────────────
+            // Fire when: index2 is enabled, we know the predicates, the prop is
+            // a plain symbol name, and the query depth tells us which argument
+            // slot to look in (depth 1 → terms[1], depth 2 → terms[2]).
+            if (index2 && this.predicates && prop[0] !== '_' && prop[0] !== '$') {
+                // query[0].length === depth of steps accumulated so far.
+                // depth 1: just SKIP_HEAD → next slot is terms[1] → use a1
+                // depth 2: SKIP_HEAD + one more step → next slot is terms[2] → use a2
+                const depth = this.query.length === 1 ? this.query[0].length : -1;
+                const slot = depth === 1 ? 'a1' : depth === 2 ? 'a2' : null;
+
+                if (slot) {
+                    const merged = new Set();
+                    for (const pred of this.predicates) {
+                        const sub = index2.get(pred)?.[slot]?.get(prop);
+                        if (sub) for (const s of sub) merged.add(s);
+                    }
+                    // Append one more SKIP_HEAD to account for the slot we just
+                    // consumed via the index, then return a plain lookupProxy proxy
+                    // (predicates no longer needed; the bucket is already tiny).
+                    const nextQuery = [this.query[0].concat([SKIP_HEAD])];
+                    return new Proxy(merged, { ...lookupProxy, query: nextQuery });
+                }
+            }
+
+            // Fall through to standard behaviour (step is a wildcard, depth
+            // is beyond what we index, or index2 is disabled).
+            return lookupProxy.get.call(this, target, prop);
+        },
+    };
+
+    // ── root (level-1) handler ───────────────────────────────────────────────
+    // Intercepts the very first step of every lookup.
+    const rootHandler = {
+        ...lookupProxy,
+        get(target, prop) {
+            if (typeof prop !== 'string') return target[prop];
+            if (prop === '$query') return this.query;
+            if (prop === '$' || prop === '_$') {
+                return lookupProxy.get.call(this, target, prop);
+            }
+
+            // ── _ANY ─────────────────────────────────────────────────────────
+            if (prop === '_ANY') {
+                return (...args) => {
+                    if (args.length > 0 && args.every(a => typeof a === 'string')) {
+                        // Union level-1 buckets for all named predicates.
+                        const merged = new Set();
+                        for (const name of args) {
+                            const bucket = index.get(name);
+                            if (bucket) for (const s of bucket) merged.add(s);
+                        }
+                        // Return a predicate-aware proxy so level-2 can fire
+                        // on the next named-symbol step.
+                        return new Proxy(merged, {
+                            ...predicateHandler,
+                            predicates: args,
+                            query: SKIPPED_1,
+                        });
+                    }
+                    // Non-string args (builder fns for _S, etc.) — standard path.
+                    return this.stack(target, [[_accessor._ANY(...args)]]);
+                };
+            }
+
+            // ── plain symbol name ─────────────────────────────────────────────
+            // Level-1 lookup: swap the full sentence set for the predicate bucket.
+            if (prop[0] !== '_' && prop[0] !== '$') {
+                const bucket = index.get(prop) ?? EMPTY_SET;
+                return new Proxy(bucket, {
+                    ...predicateHandler,
+                    predicates: [prop],
+                    query: SKIPPED_1,
+                });
+            }
+
+            // ── everything else ───────────────────────────────────────────────
+            return lookupProxy.get.call(this, target, prop);
+        },
+    };
+
+    return new Proxy(sentences, rootHandler);
+}
+
 module.exports = {
     lookupProxy,
+    createIndexedLookup,
 }

@@ -180,7 +180,9 @@ class LocalRuntimeRunner {
         try {
             pw = await jvm.java.io.PrintWriter(fileName);
         } catch (e) {
-            const detail = e.getJavaMessage ? await e.getJavaMessage() : String(e);
+            const detail = (e.javaException && typeof e.javaException.getMessage === 'function')
+                ? await e.javaException.getMessage()
+                : (e.message || String(e));
             console.error(detail);
             throw new Error(`Error opening ${fileName} to write: ${detail}`);
         }

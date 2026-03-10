@@ -58,7 +58,7 @@ function loadKBManagement(options) {
         refresh(kbs) { this.kbs = kbs; }
     };
 
-    const navigationModule = {
+    const stateModule = {
         buildWorkspaceDefinitions: sinon.stub().resolves(),
         setKB: sinon.stub()
     };
@@ -73,10 +73,10 @@ function loadKBManagement(options) {
         './sigma': sigmaModule,
         './kb-tree': { KBTreeProvider, KBNode },
         './sigma/config': configModule,
-        './navigation': navigationModule
+        './state': stateModule
     });
 
-    return { mod, vscode, sigmaRuntime, configModule, navigationModule };
+    return { mod, vscode, sigmaRuntime, configModule, stateModule };
 }
 
 // ---------------------------------------------------------------------------
@@ -87,10 +87,10 @@ describe('kb-management.js', function () {
     // -----------------------------------------------------------------------
     describe('updateActiveEditorContext()', function () {
 
-        it('sets sumo.inKB to false when no editor is provided', function () {
+        it('does not call executeCommand when no editor is provided', function () {
             const { mod, vscode } = loadKBManagement();
             mod.updateActiveEditorContext(null);
-            expect(vscode.commands.executeCommand.calledWith('setContext', 'sumo.inKB', false)).to.be.true;
+            expect(vscode.commands.executeCommand.called).to.be.false;
         });
 
         it('sets sumo.inKB to true when editor file is in a known KB', function () {
@@ -153,9 +153,9 @@ describe('kb-management.js', function () {
         });
 
         it('calls buildWorkspaceDefinitions on success', async function () {
-            const { mod, navigationModule } = loadKBManagement();
+            const { mod, stateModule } = loadKBManagement();
             await mod.openKnowledgeBaseCommand();
-            expect(navigationModule.buildWorkspaceDefinitions.called).to.be.true;
+            expect(stateModule.buildWorkspaceDefinitions.called).to.be.true;
         });
     });
 

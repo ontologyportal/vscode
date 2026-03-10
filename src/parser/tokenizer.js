@@ -32,13 +32,13 @@ class Token {
      * @param {number} line The line this token appears on in the source document
      * @param {number} column The offset of the token on its line
      * @param {number} offset The offset of this token in the global document
-     * @param {string|undefined} value The original value of the token
+     * @param {string} value The original value of the token
      * @param {string} file The file this token belongs to
     */
     constructor(type, line, column, offset, value, file) {
         /** @type {TokenType} */
         this.type = type;
-        /** @type {string|undefined} */
+        /** @type {string} */
         this.value = value;
         /** @type {number} */
         this.line = line;

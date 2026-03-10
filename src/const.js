@@ -10,13 +10,12 @@ const DEFINING_RELATIONS = [
     'instance', 
     'subclass',
     'subrelation',
+    'subAttribute',
     'domain',
     'domainSubclass',
     'range',
     'rangeSubclass',
     'documentation',
-    'format',
-    'termFormat'
 ];
 
 module.exports = {

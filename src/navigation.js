@@ -1,17 +1,10 @@
 const vscode = require('vscode');
 const { DEFINING_RELATIONS } = require('./const');
-const { findConfigXml, parseConfigXml } = require('./sigma/config');
-const fs = require('fs');
-const path = require('path');
-const { NodeType } = require('./parser');
-const { parse, tokenize } = require('./validation');
+const { Term, Sentence } = require('./parser');
 const {
-    buildWorkspaceDefinitions,
-    updateFileDefinitions,
-    getWorkspaceTaxonomy,
     getWorkspaceMetadata,
     setDiagnosticCollection,
-    setKB: stateSetKB,
+    getKB,
     getSymbolTable,
 } = require('./state');
 
@@ -19,26 +12,10 @@ const {
 // Module-level state
 // ---------------------------------------------------------------------------
 
-/** @type {string|null} Currently active knowledge base name */
-let currentKB = null;
-
 /**
- * Set the active knowledge base name.
- * @param {string|null} name
+ * Find all occurrences of a symbol
+ * @returns 
  */
-function setKB(name) {
-    currentKB = name;
-    stateSetKB(name);
-}
-
-/**
- * Get the active knowledge base name.
- * @returns {string|null}
- */
-function getKB() {
-    return currentKB;
-}
-
 async function searchSymbolCommand() {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
@@ -52,11 +29,12 @@ async function searchSymbolCommand() {
 
     const positionOptions = [
         { label: 'All', description: 'Show all occurrences' },
-        { label: '1', description: 'Predicate / Head' },
-        { label: '2', description: 'First Argument' },
-        { label: '3', description: 'Second Argument' },
-        { label: '4', description: 'Third Argument' },
-        { label: '5', description: 'Fourth Argument' }
+        { label: 'First', description: 'First Argument' },
+        { label: 'Second', description: 'Second Argument' },
+        { label: 'Third', description: 'Third Argument' },
+        { label: 'Fourth', description: 'Fourth Argument' },
+        { label: 'Antecendent', description: 'Antecedent of a conditional statement'},
+        { label: 'Consequent', description: 'Consequent of a conditional statement'},
     ];
 
     const selectedOption = await vscode.window.showQuickPick(positionOptions, {
@@ -65,49 +43,20 @@ async function searchSymbolCommand() {
 
     if (!selectedOption) return;
 
-    const filterPos = selectedOption.label === 'All' ? null : parseInt(selectedOption.label);
-
-    const files = await getKBFiles();
-    const matches = [];
-    let diagnostics = [];
-
-    for (const file of files) {
-        const doc = await vscode.workspace.openTextDocument(file);
-        const text = doc.getText();
-
-        const escapedSymbol = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const fastRegex = new RegExp(`\\b${escapedSymbol}\\b`);
-        if (!fastRegex.test(text)) continue;
-
-        let ast;
-        try {
-            const tokens = tokenize({ text, path: file.fsPath }, diagnostics);
-            ast = parse(tokens, diagnostics);
-        } catch {
-            ast = [];
-        }
-
-        const visit = (node, indexInParent) => {
-            if (node.type === NodeType.ATOM) {
-                if (node.startToken.value === symbol) {
-                    if (filterPos === null || (indexInParent !== undefined && indexInParent + 1 === filterPos)) {
-                        const pos = doc.positionAt(node.start.offset);
-                        const endPos = doc.positionAt(node.start.offset + symbol.length);
-                        const nodeRange = new vscode.Range(pos, endPos);
-                        matches.push({
-                            label: `${vscode.workspace.asRelativePath(file)}:${pos.line + 1}`,
-                            description: doc.lineAt(pos.line).text.trim(),
-                            uri: file,
-                            range: nodeRange
-                        });
-                    }
-                }
-            } else if (node.type === NodeType.LIST) {
-                node.children.forEach((child, idx) => visit(child, idx));
-            }
-        };
-
-        ast.forEach(n => visit(n));
+    const symbolTable = getSymbolTable();
+    if (!symbolTable) {
+        vscode.window.showErrorMessage(`No symbol table was found, try manually restarting the extension`);
+    }
+    const target = symbolTable.symbols[symbol];
+    /** @type {Term} */
+    const term = target.forward;
+    
+    /** @type {Sentence[]} */
+    let matches;
+    if (selectedOption.label === "All") {
+        matches = Array.from(Object.values(term.locations))
+    } else {
+        matches = term.locations[selectedOption.label.toLowerCase()]
     }
 
     if (matches.length === 0) {
@@ -115,7 +64,19 @@ async function searchSymbolCommand() {
         return;
     }
 
-    const selected = await vscode.window.showQuickPick(matches, { placeHolder: `Occurrences of '${symbol}'` });
+    const selected = await vscode.window.showQuickPick(matches.map(m => {
+        const token = m.node.startToken;
+        const endToken = m.node.startToken;
+        return { 
+            label: `${vscode.workspace.asRelativePath(token.file)}:${token.line}`,
+            description: m.node.toString(),
+            uri: token.file,
+            range: new vscode.Range(
+                new vscode.Position(token.line, token.col),
+                new vscode.Position(endToken.line, endToken.col)
+            )
+        }
+    }), { placeHolder: `Occurrences of '${symbol}'` });
     if (selected) {
         const doc = await vscode.workspace.openTextDocument(selected.uri);
         const editor = await vscode.window.showTextDocument(doc);
@@ -124,132 +85,58 @@ async function searchSymbolCommand() {
     }
 }
 
-/**
- * Jump to the definition of a term
- * @returns
- */
-async function goToDefinitionCommand() {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) return;
-
-    const document = editor.document;
-    const position = editor.selection.active;
-    const wordRange = document.getWordRangeAtPosition(position);
-    if (!wordRange) return;
-
-    const symbol = document.getText(wordRange);
-    const definitions = await findDefinitions(symbol);
-
-    if (definitions.length === 0) {
-        vscode.window.showInformationMessage(`No definition found for '${symbol}'.`);
-        return;
-    }
-
-    if (definitions.length === 1) {
-        const def = definitions[0];
-        const doc = await vscode.workspace.openTextDocument(def.uri);
-        const editor = await vscode.window.showTextDocument(doc);
-        editor.selection = new vscode.Selection(def.range.start, def.range.end);
-        editor.revealRange(def.range, vscode.TextEditorRevealType.InCenter);
-    } else {
-        const items = definitions.map(def => ({
-            label: `${def.type}: ${symbol}`,
-            description: vscode.workspace.asRelativePath(def.uri),
-            detail: def.context,
-            definition: def
-        }));
-
-        const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: `Multiple definitions found for '${symbol}'`
-        });
-
-        if (selected) {
-            const def = selected.definition;
-            const doc = await vscode.workspace.openTextDocument(def.uri);
-            const editor = await vscode.window.showTextDocument(doc);
-            editor.selection = new vscode.Selection(def.range.start, def.range.end);
-            editor.revealRange(def.range, vscode.TextEditorRevealType.InCenter);
-        }
-    }
-}
-
-async function provideDefinition(document, position) {
+function provideDefinition(document, position) {
     const wordRange = document.getWordRangeAtPosition(position);
     if (!wordRange) return null;
 
     const symbol = document.getText(wordRange);
-    const definitions = await findDefinitions(symbol);
+    const definitions = findDefinitions(symbol);
 
-    return definitions.map(def => new vscode.Location(def.uri, def.range));
+    return definitions.map(def => new vscode.Location(vscode.Uri.parse(`file://${def.uri}`), def.range));
 }
 
-async function findDefinitions(symbol) {
+/** 
+ * Find the defining relations of the symbol
+ * @param {string} symbol The symbol to look for
+ * @returns {{
+ *   uri: string,
+ *   range: vscode.Range,
+ *   type: string,
+ *   context: string
+ * }[]}
+ */
+function findDefinitions(symbol) {
+    /**
+     * @type {{
+     *   uri: string,
+     *   range: vscode.Range,
+     *   type: string,
+     *   context: string
+     * }[]}
+     */
     const definitions = [];
-    const files = await getKBFiles();
-
-    if (symbol.startsWith('?') || symbol.startsWith('@')) {
-        return definitions;
+    const symbolTable = getSymbolTable();
+    if (!symbolTable) {
+        vscode.window.showErrorMessage(`No symbol table was found, try manually restarting the extension`);
+        return;
     }
 
-    for (const file of files) {
-        const doc = await vscode.workspace.openTextDocument(file);
-        const text = doc.getText();
-
-        if (!text.includes(symbol)) continue;
-
-        for (const rel of DEFINING_RELATIONS) {
-            const pattern = new RegExp(
-                `\\(\\s*${rel}\\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s`,
-                'g'
-            );
-
-            let match;
-            while ((match = pattern.exec(text)) !== null) {
-                const startOffset = match.index;
-                const symbolStart = text.indexOf(symbol, startOffset + rel.length + 2);
-                const lineNum = doc.positionAt(symbolStart).line;
-                const line = doc.lineAt(lineNum).text;
-
-                definitions.push({
-                    uri: file,
-                    range: new vscode.Range(
-                        doc.positionAt(symbolStart),
-                        doc.positionAt(symbolStart + symbol.length)
-                    ),
-                    type: rel,
-                    context: line.trim()
-                });
-            }
-        }
-
-        const subclassPattern = new RegExp(
-            `\\(\\s*subclass\\s+(${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s+([^\\s)]+)`,
-            'g'
-        );
-        let match;
-        while ((match = subclassPattern.exec(text)) !== null) {
-            const startOffset = match.index;
-            const symbolStart = text.indexOf(symbol, startOffset + 10);
-            const lineNum = doc.positionAt(symbolStart).line;
-            const line = doc.lineAt(lineNum).text;
-
-            const exists = definitions.some(d =>
-                d.uri.fsPath === file.fsPath &&
-                d.range.start.line === lineNum &&
-                d.type === 'subclass'
-            );
-            if (!exists) {
-                definitions.push({
-                    uri: file,
-                    range: new vscode.Range(
-                        doc.positionAt(symbolStart),
-                        doc.positionAt(symbolStart + symbol.length)
-                    ),
-                    type: 'subclass',
-                    context: line.trim()
-                });
-            }
-        }
+    for (const relationship of DEFINING_RELATIONS) {
+        const sentences = symbolTable.lookup[relationship][symbol]._$;
+        sentences.forEach((m) => {
+            const token = m.node.startToken;
+            const endToken = m.node.startToken;
+            const def = { 
+                type: relationship,
+                context: m.node.toString(),
+                uri: token.file,
+                range: new vscode.Range(
+                    new vscode.Position(token.line, token.col),
+                    new vscode.Position(endToken.line, endToken.col)
+                )
+            };
+            definitions.push(def);
+        })
     }
 
     definitions.sort((a, b) => {
@@ -286,42 +173,12 @@ async function browseInSigmaCommand() {
 
     const config = vscode.workspace.getConfiguration('sumo');
     const sigmaUrl = config.get('sigma.url') || 'http://sigma.ontologyportal.org:8080/sigma/Browse.jsp';
-    const kb = currentKB || 'SUMO';
+    const kb = getKB() || 'SUMO';
     const lang = config.get('general.language') || 'EnglishLanguage';
 
     const url = `${sigmaUrl}?kb=${encodeURIComponent(kb)}&lang=${encodeURIComponent(lang)}&flang=SUO-KIF&term=${encodeURIComponent(symbol)}`;
 
     vscode.env.openExternal(vscode.Uri.parse(url));
-}
-
-/**
- * Get the list of known knowledge base names from the Sigma config.
- * @returns {Promise<string[]>}
- */
-async function getKBs() {
-    const configPath = await findConfigXml();
-    if (!configPath) return [];
-    const config = await parseConfigXml(configPath);
-    if (!config?.knowledgeBases) return [];
-    return Object.keys(config.knowledgeBases);
-}
-
-/**
- * Get all the files for a KB.
- * @param {string | undefined} kbName Which KB's files to fetch (defaults to currentKB)
- * @returns {Promise<vscode.Uri[]>}
- */
-async function getKBFiles(kbName = undefined) {
-    if (!kbName) kbName = currentKB;
-    if (!kbName) return [];
-    const configPath = await findConfigXml();
-    if (!configPath) return [];
-    const config = await parseConfigXml(configPath);
-    if (!config?.knowledgeBases?.[kbName]) return [];
-    const constituents = config.knowledgeBases[kbName].constituents || [];
-    return constituents
-        .filter(p => fs.existsSync(p))
-        .map(p => vscode.Uri.file(p));
 }
 
 
@@ -336,7 +193,7 @@ async function getKBFiles(kbName = undefined) {
  *   _OP_._SYM_._SYM_.$            — all binary operator sentences
  */
 async function lookupQueryCommand() {
-    const symbolTable = getSymbolTable(currentKB);
+    const symbolTable = getSymbolTable(getKB());
     if (!symbolTable) {
         vscode.window.showWarningMessage('No knowledge base is loaded. Open a KB first.');
         return;
@@ -425,18 +282,11 @@ async function lookupQueryCommand() {
 }
 
 module.exports = {
-    getKBFiles,
     searchSymbolCommand,
-    goToDefinitionCommand,
     provideDefinition,
     findDefinitions,
     browseInSigmaCommand,
-    buildWorkspaceDefinitions,
-    setKB,
-    getKB,
     setDiagnosticCollection,
-    updateFileDefinitions,
-    getWorkspaceTaxonomy,
     getWorkspaceMetadata,
     lookupQueryCommand,
 };

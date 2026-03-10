@@ -44,6 +44,27 @@ class SemanticError extends Error {
 // ---------------------------------------------------------------------------
 
 const TAXONOMY_RELATIONS = new Set(['subclass', 'instance', 'subAttribute', 'subrelation']);
+
+/**
+ * DFS helper for isInstance — propagates instance-hood upward through
+ * subAttribute and subrelation edges (both link instances to instances),
+ * but not subclass edges (which link classes to classes).
+ * The visited set prevents infinite loops on cycles.
+ * @param {Term} term
+ * @param {Set<Term>} visited
+ * @returns {boolean}
+ */
+function _isInstanceDFS(term, visited) {
+    if (visited.has(term)) return false;
+    visited.add(term);
+    return term.taxonomy.incoming.some(e => {
+        if (e.relation === 'instance') return true;
+        if (e.relation !== 'subclass') {
+            return _isInstanceDFS(e.from, visited);
+        }
+        return false;
+    });
+}
 const ARITY_MAPPINGS = {
     "BinaryRelation": 2,
     "TernaryRelation": 3,
@@ -92,15 +113,14 @@ class Term extends CachedSemanticStatement {
      * @param {Symbol} symbol The Symbol object from symbol.js
      */
     constructor(symbol) {
+        // if (!symbol) throw new Error("WTF");
         super(symbol.symbolTable);
         /**
          * The source Symbol from the SymbolTable.
          * @type {Symbol}
          */
         this.symbol = symbol;
-
-        // Populate the forward reference
-        this.symbol.forward = this;
+        symbol.forward = this;
     }
 
     /** Convenience accessor for the underlying symbol name.
@@ -203,21 +223,21 @@ class Term extends CachedSemanticStatement {
      */
     get taxonomy () {
         return this._getCache("taxonomy", () => {
-            /** @type {Sentence[]} */
+            /** @type {Set<Sentence>} */
             const incomingSym = this.symbol.symbolTable.lookup._ANY(...TAXONOMY_RELATIONS)[this.name]._SYM_.$;
             const incoming = [...incomingSym].map(sentence => {
                 /** @type {[Symbol, Symbol, Symbol]} */
                 const terms = sentence.terms;
-                const from = terms[2].forward || new Term(terms[2]);
+                const from = terms[2].forward;
                 const relation = terms[0].name;
                 return new TaxonomyEdge(from, this, relation);
             });
-            /** @type {Sentence[]} */
+            /** @type {Set<Sentence>} */
             const outgoingSym = this.symbol.symbolTable.lookup._ANY(...TAXONOMY_RELATIONS)._SYM_[this.name].$;
             const outgoing = [...outgoingSym].map(sentence => {
                 /** @type {[Symbol, Symbol, Symbol]} */
                 const terms = sentence.terms;
-                const to = terms[1].forward || new Term(terms[1]);
+                const to = terms[1].forward;
                 const relation = terms[0].name;
                 return new TaxonomyEdge(this, to, relation);
             })
@@ -249,17 +269,33 @@ class Term extends CachedSemanticStatement {
      * }}
      */
     get locations () {
-        return this._getCache("locations", () => {
-            /** @type {Sentence[]} */
-            const first = this.symbol.symbolTable.lookup._SYM_[this.name]._$;
-            const second = this.symbol.symbolTable.lookup._SYM_._[this.name]._$;
-            const antecedent = this.symbol.symbolTable.lookup._OP("=>")._S((l, q) => l.$_._ANY(this.name, l2 => l2._S(q))._$)._.$;
-            const consequent = this.symbol.symbolTable.lookup._OP("=>")._._S((l, q) => l.$_._ANY(this.name, l2 => l2._S(q))._$).$;
+        return this._getCache("locations:obj", () => {
+            const self = this;
             return {
-                first,
-                second,
-                antecedent,
-                consequent
+                get first() {
+                    return self._getCache("locations:1",
+                        () => self.symbol.symbolTable.lookup._SYM_[self.name]._$)
+                },
+                get second() {
+                    return self._getCache("locations:2",
+                        () => self.symbol.symbolTable.lookup._SYM_._[self.name]._$)
+                },
+                get third () {
+                    return self._getCache("locations:3",
+                        () => self.symbol.symbolTable.lookup._SYM_._._[self.name]._$)
+                },
+                get fourth () {
+                    return self._getCache("locations:4",
+                        () => self.symbol.symbolTable.lookup._SYM_._._._[self.name]._$)
+                },
+                get antecedent() {
+                    return self._getCache("locations:antecedent",
+                        () => self.symbol.symbolTable.lookup._OP("=>")._S((l, q) => l.$_._ANY(self.name, l2 => l2._S(q))._$)._.$)
+                },
+                get consequent () {
+                    return self._getCache("locations:consequent",
+                        () => self.symbol.symbolTable.lookup._OP("=>")._._S((l, q) => l.$_._ANY(self.name, l2 => l2._S(q))._$).$)
+                }
             };
         });
     }
@@ -270,7 +306,7 @@ class Term extends CachedSemanticStatement {
      * @returns {boolean}
      */
     get isInstance() {
-        return this._getCache('isInstance', () => this.taxonomy.incoming.some(e => e.relation === 'instance'));
+        return this._getCache('isInstance', () => _isInstanceDFS(this, new Set()));
     }
 
     /**
@@ -339,7 +375,7 @@ class Term extends CachedSemanticStatement {
                     throw new SemanticError(sentence, "domain statement require a numerical literal as its second argument");
                 }
                 /** @type {Term} */
-                const termType = terms[3].forward || new Term(terms[3]);
+                const termType = terms[3].forward;
                 if (!termType.isClass) {
                     throw new SemanticError(sentence, "domain requires a class symbol as its third argument");
                 }
@@ -372,7 +408,7 @@ class Term extends CachedSemanticStatement {
                     throw new SemanticError(sentence, "domainSubclass statement require a numerical literal as its second argument");
                 }
                 /** @type {Term} */
-                const termType = terms[3].forward || new Term(terms[3]);
+                const termType = terms[3].forward;
                 if (!termType.isClass) {
                     throw new SemanticError(sentence, "domainSubclass requires a class symbol as its third argument");
                 }
@@ -387,36 +423,46 @@ class Term extends CachedSemanticStatement {
     }
 
     /**
-     * Shortcut domain validation
+     * Shortcut domain validation, check if the given term fulfills this 
+     *  terms domain at the given index
      * @param {Term} term
      * @param {number} idx
      * @returns {boolean}
      */
     validateDomain(term, idx) {
+        if (!term) return false;
         // Validate this term first
         if (!this.validate()) return false;
         const domain = this.domain;
-        const d = domain[Math.min(idx, domain.length - 1)];
+        const domainSubclass = this.domainSubclass;
+        let d;
+        let isSubclass = false; 
 
-        if (d) {
-            if (!term.isInstance) return false;
+        domain.forEach((dm, i) => {
+            if (i === idx) d = dm;
+        });
+        domainSubclass.forEach((dm, i) => {
+            if (i === idx) {
+                d = dm;
+                isSubclass = true;
+            }
+        });
+        if (!d && (domain.length > 0 || domainSubclass.length > 0)) {
+            if (domain.length > domainSubclass.length) d = domain.at(-1);
+            else {
+                d = domainSubclass.at(-1);
+                isSubclass = true;
+            }
+        }
+
+        if (d) { // Check if there is a domain AND if its not accidentally dipping into DS
+            // Shortcut for Class
+            if (d.name === "Entity") return true; // Shortcut for now
+            if (d.name === "Class") return term.isClass;
+            if (!isSubclass && !term.isInstance) return false;
+            if (isSubclass && !term.isClass) return false;
             return term.hasAncestor(d.name);
         }
-
-        const domainSubclass = this.domainSubclass;
-        const ds = domainSubclass[Math.min(idx, domainSubclass.length - 1)];
-
-        if (ds) {
-            if (!term.isClass) return false;
-            return term.hasAncestor(ds.name);
-        }
-
-        console.log(
-            this.name,
-            this.domain.length,
-            this.domain.map(d => d?.name),
-            this.domainSubclass.length,
-            this.domainSubclass.map(d => d?.name));
 
         return false;
     }
@@ -434,7 +480,7 @@ class Term extends CachedSemanticStatement {
             const sentences = this.symbol.symbolTable.lookup.range[this.name]._SYM_.$;
             const sentence = [...sentences].at(-1);
             if (!sentence) return null;
-            const rangeTerm = sentence.terms[2].forward || new Term(sentence.terms[2]);
+            const rangeTerm = sentence.terms[2].forward;
             if (!rangeTerm.isClass) {
                 throw new SemanticError(sentence, "range requires a class symbol as its second argument");
             }
@@ -456,7 +502,7 @@ class Term extends CachedSemanticStatement {
             const sentences = this.symbol.symbolTable.lookup.rangeSubclass[this.name]._SYM_.$;
             const sentence = [...sentences].at(-1);
             if (!sentence) return null;
-            const rangeTerm = sentence.terms[2].forward || new Term(sentence.terms[2]);
+            const rangeTerm = sentence.terms[2].forward;
             if (!rangeTerm.isClass) {
                 throw new SemanticError(sentence, "rangeSubclass requires a class symbol as its second argument");
             }
@@ -617,6 +663,9 @@ class Term extends CachedSemanticStatement {
         });
     }
 }
+
+// Set semantic type for Symbol
+Symbol.setSemanticType(Term);
 
 /**
  * Helper class to declare an object is an instance of another Term

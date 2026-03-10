@@ -33,11 +33,36 @@ const ELEMENT_TYPE = {
 
 /** Base class for everything in KIF language */
 class Element {
+    /** @param {class} */
+    static _semanticType = SemanticStatement;
+
+    /** @param {class} */
+    static setSemanticType(type) {
+        this._semanticType = type;
+    }
+
     /**
      * Forward reference to the parsed 
      * @type {SemanticStatement}
      */
-    forward;
+    #_forward;
+
+    /**
+     * @returns {SemanticStatement}
+     */
+    get forward() {
+        if (!this.#_forward) {
+            if (!this.constructor._semanticType) {
+                return undefined;
+            }
+            this.#_forward = new this.constructor._semanticType(this);
+        }
+        return this.#_forward;
+    }
+
+    set forward(v) {
+        this.#_forward = v;
+    }
 
     /** @returns {ELEMENT_TYPE} */
     get $TYPE() {

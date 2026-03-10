@@ -1,19 +1,27 @@
 const vscode = require('vscode');
-const { LOGIC_OPS, QUANTIFIERS } = require('./const');
 const {
     tokenize,
-    parse,
+    Token,
+    TokenList,
+    ASTNode,
     syntax,
     semantics,
-} = require('./state');
-const {
-    NodeType
+    SyntaxError,
+    SemanticError,
+    Formula,
+    Sentence,
+    OperatorSentence,
+    SymbolTable,
+    Term
 } = require('./parser');
 
 let symbolMetadata = {};
 
-/** @type {vscode.DiagnosticCollection|null} */
-let _diagnosticCollection = null;
+/**
+ * VSCode diagnostic collection
+ * @type {vscode.DiagnosticCollection}
+ */
+let _diagnosticCollection; 
 
 /**
  * Set the shared diagnostic collection used by checkErrorsCommand.
@@ -22,10 +30,9 @@ let _diagnosticCollection = null;
 function setDiagnosticCollection(collection) {
     _diagnosticCollection = collection;
 }
-
 /**
  * Compute a VS Code Range from an AST node using its stored token offsets.
- * @param {import('./parser').ASTNode} node
+ * @param {ASTNode} node
  * @param {vscode.TextDocument} document
  * @returns {vscode.Range}
  */
@@ -39,169 +46,151 @@ function nodeRange(node, document) {
 }
 
 /**
- * Run the full syntax + semantic pipeline on an AST and return the terms map.
- * @param {import('./parser').ASTNode[]} ast
- * @param {vscode.Diagnostic[]} [diagnostics]
- * @returns {{ [name: string]: import('./parser/term').Term }}
- */
-function analyse(ast, diagnostics) {
-    const diags = diagnostics || [];
-    const { symbolTable } = syntax(ast, diags);
-    return semantics(symbolTable, diags);
-}
-
-/**
- * Validate a single AST node and recurse into its children.
- * Checks:
- *   - Operands of logical operators are valid logical sentences (not bare atoms)
- *   - The class/type argument of subclass/instance starts with an uppercase letter
- * @param {import('./parser').ASTNode} node
+ * Tokenize a string into a list of tokens, converting any TokenizerErrors into a VS Code diagnostic.
+ * @param {{text?: string, file?: string, doc?: vscode.TextDocument}} source
  * @param {vscode.Diagnostic[]} diagnostics
- * @param {object} terms (unused, kept for API compatibility)
- * @param {vscode.TextDocument} document
+ * @returns {Token[]}
  */
-function validateNode(node, diagnostics, terms, document) {
-    if (!node || node.type !== NodeType.LIST) return;
-
-    if (node.children.length > 0) {
-        const head = node.children[0];
-        if (head.type === NodeType.ATOM || head.type === NodeType.OPERATOR) {
-            const op = head.startToken.value;
-
-            if (LOGIC_OPS.includes(op)) {
-                for (let i = 1; i < node.children.length; i++) {
-                    validateOperand(node.children[i], diagnostics, document);
-                }
-            }
-
-            if (op === 'subclass' || op === 'instance') {
-                // Check first arg (the defined class/instance) and second arg (the parent class)
-                for (const idx of [1, 2]) {
-                    if (node.children.length > idx) {
-                        const arg = node.children[idx];
-                        if (arg.type === NodeType.ATOM) {
-                            const firstChar = arg.startToken.value.charAt(0);
-                            if (firstChar >= 'a' && firstChar <= 'z') {
-                                diagnostics.push(new vscode.Diagnostic(
-                                    nodeRange(arg, document),
-                                    `Class/Type '${arg.startToken.value}' should start with an uppercase letter.`,
-                                    vscode.DiagnosticSeverity.Warning
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+function tokenizeWrapper(source, diagnostics) {
+    let { text, doc, path: filePath } = source;
+    if (!text && !doc) throw new Error("tokenize must be provided either a text/doc property");
+    if (!text) {
+        text = doc.getText();
+        filePath = doc.uri.fsPath;
     }
-
-    node.children.forEach(child => validateNode(child, diagnostics, terms, document));
-}
-
-/**
- * Validate that a node used as an operand of a logical operator is a valid logical sentence.
- * @param {import('./parser').ASTNode} node
- * @param {vscode.Diagnostic[]} diagnostics
- * @param {vscode.TextDocument} document
- */
-function validateOperand(node, diagnostics, document) {
-    if (node.type !== NodeType.LIST) {
-        if (node.type === NodeType.VARIABLE || node.type === NodeType.ROW_VARIABLE) {
-            return;
-        }
+    const { tokens, errors } = tokenize(text, filePath);
+    for (const e of errors) {
+        const pos = new vscode.Position(e.line, e.col);
         diagnostics.push(new vscode.Diagnostic(
-            nodeRange(node, document),
-            'Operand must be a logical sentence or relation, not an atom.',
+            new vscode.Range(pos, pos.translate(0, 1)),
+            e.error || e.message,
             vscode.DiagnosticSeverity.Error
         ));
-        return;
     }
-
-    if (node.children.length === 0) return;
-    const head = node.children[0];
-
-    if (head.type === NodeType.ATOM) {
-        const val = head.startToken.value;
-
-        if (LOGIC_OPS.includes(val) || QUANTIFIERS.includes(val) || val === '=') {
-            return;
-        }
-
-        const firstChar = val.charAt(0);
-
-        if (firstChar >= 'a' && firstChar <= 'z') {
-            return;
-        }
-
-        if (firstChar >= 'A' && firstChar <= 'Z') {
-            diagnostics.push(new vscode.Diagnostic(
-                nodeRange(node, document),
-                `Invalid operand: '${val}' appears to be a Function or Instance (starts with Uppercase). Expected a Relation or Logical Sentence.`,
-                vscode.DiagnosticSeverity.Error
-            ));
-        }
-    }
+    return tokens;
 }
 
 /**
- * Validate variable scoping inside quantified expressions.
- * @param {import('./parser').ASTNode[]} ast
+ * Parse a token list into an AST, converting any ParsingError into a VS Code diagnostic.
+ * @param {Token[]} tokens
  * @param {vscode.Diagnostic[]} diagnostics
+ * @returns {ASTNode[]}
  */
-function validateVariables(ast, diagnostics) {
-    const visit = (node, scope = new Set()) => {
-        if (node.type === NodeType.LIST && node.children.length > 0) {
-            const head = node.children[0];
-
-            if (head.type === NodeType.ATOM && QUANTIFIERS.includes(head.startToken.value)) {
-                if (node.children.length >= 2 && node.children[1].type === NodeType.LIST) {
-                    const varList = node.children[1];
-                    const newScope = new Set(scope);
-
-                    varList.children.forEach(v => {
-                        if (v.type === NodeType.VARIABLE || v.type === NodeType.ROW_VARIABLE) {
-                            newScope.add(v.startToken.value);
-                        }
-                    });
-
-                    for (let i = 2; i < node.children.length; i++) {
-                        visit(node.children[i], newScope);
-                    }
-                    return;
-                }
-            }
-
-            node.children.forEach(child => visit(child, scope));
-        }
-    };
-
-    ast.forEach(node => visit(node));
+function parseWrapper(tokens, diagnostics) {
+    const list = new TokenList(tokens);
+    const { nodes, errors } = list.parse();
+    for (const e of errors) {
+        const startPos = new vscode.Position(e.line, e.column);
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(startPos, startPos.translate(0, 1)),
+            e.error || e.message,
+            vscode.DiagnosticSeverity.Error
+        ));
+    }
+    return nodes;
 }
 
 /**
- * Validate that every relation call has at least one argument.
- * @param {import('./parser').ASTNode[]} ast
+ * Wrapper for syntax to correctly capture errors.
+ * @param {ASTNode[]} nodes
  * @param {vscode.Diagnostic[]} diagnostics
- * @param {vscode.TextDocument} document
+ * @param {SymbolTable?} existingTable
+ * @returns {{ symbolTable: SymbolTable, sentences: Sentence[] }}
  */
-function validateRelationUsage(ast, diagnostics, document) {
-    const visit = (node) => {
-        if (node.type === NodeType.LIST && node.children.length > 0) {
-            const head = node.children[0];
-
-            if (node.children.length === 1 && head.type === NodeType.ATOM && !LOGIC_OPS.includes(head.startToken.value)) {
-                diagnostics.push(new vscode.Diagnostic(
-                    nodeRange(node, document),
-                    `Relation '${head.startToken.value}' has no arguments.`,
-                    vscode.DiagnosticSeverity.Warning
-                ));
-            }
-
-            node.children.forEach(visit);
+function syntaxWrapper(nodes, diagnostics, existingTable) {
+    const { symbolTable, errors, syntax: sentences } = syntax(nodes, existingTable);
+    for (const e of errors) {
+        if (!(e instanceof SyntaxError)) {
+            continue;
         }
-    };
+        const pos = new vscode.Position(e.lineStart ?? 0, e.colStart ?? 0);
+        const endPos = e.lineEnd != null
+            ? new vscode.Position(e.lineEnd, e.colEnd ?? 0)
+            : pos.translate(0, 1);
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(pos, endPos),
+            e.details || e.message,
+            vscode.DiagnosticSeverity.Error
+        ));
+    }
+    return { symbolTable, sentences };
+}
 
-    ast.forEach(visit);
+/**
+ * Run the semantics pass — builds Term objects on the symbolTable (sym.forward is set).
+ * @param {SymbolTable} symbolTable
+ * @param {vscode.Diagnostic[]} diagnostics
+ * @returns {{ [name: string]: Term }}
+ */
+function semanticsWrapper(symbolTable, diagnostics) {
+    const {terms: termMap, errors } = semantics(symbolTable);
+    const terms = {};
+    for (const [name, sym] of Object.entries(symbolTable.symbols)) {
+        const term = termMap.get(sym);
+        if (term) terms[name] = term;
+    }
+    for (const e of errors) {
+        if (!(e instanceof SemanticError)) {
+            console.error(e);
+            continue;
+        }
+        const {startLine, startCol, endLine, endCol} = e.getRange();
+        const pos = new vscode.Position(startLine, startCol);
+        const endPos = new vscode.Position(endLine, endCol);
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(pos, endPos),
+            e.details || e.message,
+            vscode.DiagnosticSeverity.Error
+        ));
+    }
+    return terms;
+}
+
+/**
+ * Call Formula.validate() (which cascades into Term.validate()) for every
+ * root sentence that belongs to `fsPath`. Converts SemanticErrors to
+ * VS Code Error diagnostics.
+ * @param {SymbolTable} symbolTable
+ * @param {{[file: string]: vscode.Diagnostic[]}} diagnostics
+ */
+function validateSemantics(symbolTable, diagnostics) {
+    for (const sentence of symbolTable.sentences) {
+        const formula = sentence.forward || new Formula(sentence);
+        if (!formula) continue;
+
+        // For non-operator sentences, only validate when the head symbol has
+        // at least one taxonomy declaration in this KB.  If it has none, the
+        // symbol is completely unknown here (e.g. a SUMO built-in declared in
+        // another file) and we cannot distinguish "wrong type" from "not yet
+        // declared" — skip rather than emit a false positive.
+        if (!(sentence instanceof OperatorSentence)) {
+            const headForward = sentence.terms[0]?.forward;
+            if (!headForward) continue;
+            const { incoming, outgoing } = headForward.taxonomy;
+            if (incoming.length === 0 && outgoing.length === 0) continue;
+        }
+
+        try {
+            formula?.validate();
+        } catch (e) {
+            let range;
+            if (!(e instanceof SemanticError)) {
+                console.error(e);
+                continue;
+            }
+            try {
+                const { startLine, startCol, endLine, endCol } = e.getRange();
+                range = new vscode.Range(
+                    new vscode.Position(startLine, startCol),
+                    new vscode.Position(endLine, endCol)
+                );
+            } catch (_) {
+                range = new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 1));
+            }
+            if (!(sentence.node.file in diagnostics)) diagnostics[sentence.node.file] = [];
+            diagnostics[sentence.node.file].push(new vscode.Diagnostic(range, e.details || e.message, vscode.DiagnosticSeverity.Error));
+        }
+    }
 }
 
 /**
@@ -251,7 +240,7 @@ function validateBestPractices(symbolTable, document, diagnostics) {
             diagnostics.push(new vscode.Diagnostic(
                 defRange,
                 `'${term.name}' has no termFormat string.`,
-                vscode.DiagnosticSeverity.Information
+                vscode.DiagnosticSeverity.Hint
             ));
         }
 
@@ -259,7 +248,7 @@ function validateBestPractices(symbolTable, document, diagnostics) {
             diagnostics.push(new vscode.Diagnostic(
                 defRange,
                 `'${term.name}' is a relation but has no format string.`,
-                vscode.DiagnosticSeverity.Information
+                vscode.DiagnosticSeverity.Hint
             ));
         }
     }
@@ -400,7 +389,7 @@ async function checkErrorsCommand() {
     const document = editor.document;
     const diagnostics = [];
 
-    const tokens = tokenize({ doc: document }, diagnostics);
+    const tokens = tokenizeWrapper({ doc: document }, diagnostics);
 
     if (diagnostics.length > 0) {
         if (_diagnosticCollection) {
@@ -410,13 +399,10 @@ async function checkErrorsCommand() {
         return;
     }
 
-    const ast = parse(tokens, diagnostics);
-    ast.forEach(node => validateNode(node, diagnostics, {}, document));
-    validateVariables(ast, diagnostics);
-    validateRelationUsage(ast, diagnostics, document);
+    const ast = parseWrapper(tokens, diagnostics);
 
-    const { symbols: symbolTable } = syntax(ast, diagnostics);
-    semantics(symbolTable, diagnostics);
+    const { symbolTable } = syntaxWrapper(ast, diagnostics);
+    semanticsWrapper(symbolTable, diagnostics);
     validateBestPractices(symbolTable, document, diagnostics);
     validateFileDependencies(symbolTable, document, diagnostics);
 
@@ -446,18 +432,15 @@ function setSymbolMetadata(meta) {
 }
 
 module.exports = {
-    tokenize,
-    parse,
-    syntax,
-    semantics,
-    validateNode,
-    validateOperand,
-    validateVariables,
-    validateRelationUsage,
+    tokenize: tokenizeWrapper,
+    parse: parseWrapper,
+    syntax: syntaxWrapper,
+    semantics: semanticsWrapper,
+    validateSemantics,
     validateBestPractices,
     validateFileDependencies,
     checkErrorsCommand,
-    setDiagnosticCollection,
     getSymbolMetadata,
-    setSymbolMetadata
+    setSymbolMetadata,
+    setDiagnosticCollection
 };

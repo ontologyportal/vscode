@@ -74,6 +74,14 @@ class ASTNode {
         /** @type {string} */
         this.file = token.file;
     }
+
+    /**
+     * String representation of the node
+     * @returns {string}
+     */
+    toString() {
+        return this.startToken.value;
+    }
 }
 
 class ASTListNode extends ASTNode {
@@ -114,6 +122,14 @@ class ASTListNode extends ASTNode {
             return this.children[0];
         }
         return null;
+    }
+
+    /**
+     * String representation of the node
+     * @returns {string}
+     */
+    toString() {
+        return [this.startToken.value, ...this.children.map(c => c.toString()), this.endToken.value].join(" ");
     }
 }
 

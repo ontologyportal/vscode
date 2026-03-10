@@ -11,14 +11,12 @@ const { KBTreeProvider } = require('./src/kb-tree');
 
 const {
     searchSymbolCommand,
-    goToDefinitionCommand,
     provideDefinition,
-    updateFileDefinitions,
-    getKB,
     setDiagnosticCollection,
     browseInSigmaCommand,
     lookupQueryCommand,
 } = require('./src/navigation');
+const { setExtensionContext, getKB, handleFileChange } = require('./src/state');
 
 const { showTaxonomyCommand } = require('./src/taxonomy');
 
@@ -32,11 +30,6 @@ const {
     checkErrorsCommand,
     setDiagnosticCollection: setValidationDiagnosticCollection
 } = require('./src/validation');
-
-const { 
-    queryProverCommand, 
-    runProverOnScopeCommand 
-} = require('./src/prover');
 
 const { generateTPTPCommand } = require('./src/generate-tptp');
 
@@ -66,6 +59,10 @@ let kbTreeProvider;
  * @param {vscode.ExtensionContext} context 
  */
 async function activate(context) {
+    // Make the extension context available to the parser cache layer first,
+    // before any KB loading or parsing happens.
+    setExtensionContext(context);
+
     // Create a single diagnostic collector shared by all validation paths
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('sumo');
     context.subscriptions.push(diagnosticCollection);
@@ -92,12 +89,9 @@ async function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('sumo.searchSymbol', searchSymbolCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.showTaxonomy', (arg) => showTaxonomyCommand(context, arg)));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.formatAxiom', formatAxiomCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('sumo.goToDefinition', goToDefinitionCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.browseInSigma', browseInSigmaCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.lookupQuery', lookupQueryCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.checkErrors', checkErrorsCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('sumo.queryProver', queryProverCommand));
-    context.subscriptions.push(vscode.commands.registerCommand('sumo.runProverOnScope', runProverOnScopeCommand));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.generateTPTP', () => generateTPTPCommand(context)));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.openRepl', openSumoRepl));
     context.subscriptions.push(vscode.commands.registerCommand('sumo.restartSigma', async () => {
@@ -182,6 +176,7 @@ async function activate(context) {
     // Debounce map: fsPath → pending setTimeout handle
     const pendingSaves = new Map();
 
+    /** @type {(document: vscode.TextDocument) => void} */
     const parseOnSave = (document) => {
         if (document.languageId !== 'suo-kif') return;
         const filePath = document.uri.fsPath;
@@ -198,7 +193,7 @@ async function activate(context) {
                 title: `Running Sigma Translation...`,
                 cancellable: false
             }, async () => {
-                updateFileDefinitions(document);
+                handleFileChange(document);
             });
         }, 150));
     };
@@ -206,7 +201,7 @@ async function activate(context) {
     context.subscriptions.push(
         vscode.workspace.onDidOpenTextDocument(doc => {
             if (doc.languageId !== 'suo-kif') return;
-            updateFileDefinitions(doc);
+            handleFileChange(doc, true);
         }),
         vscode.workspace.onDidSaveTextDocument((document) => {
             parseOnSave(document);
@@ -220,10 +215,6 @@ async function activate(context) {
             }
         })
     );
-
-    vscode.workspace.textDocuments.forEach(doc => {
-        if (doc.languageId === 'suo-kif') updateFileDefinitions(doc);
-    });
 
     context.subscriptions.push(
         vscode.languages.registerHoverProvider('suo-kif', {
@@ -277,6 +268,10 @@ async function activate(context) {
         vscode.commands.executeCommand('setContext', 'sumo.kifFileOpened', true);
 
         openKnowledgeBaseCommand().catch(e => console.error('Failed to initialize KB:', e));
+
+        vscode.workspace.textDocuments.forEach(doc => {
+            if (doc.languageId === 'suo-kif') handleFileChange(doc, true);
+        });
 
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,

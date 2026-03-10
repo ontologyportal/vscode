@@ -22,8 +22,10 @@ const {
 } = require('./sentence');
 
 const {
-    lookupProxy
+    lookupProxy,
+    createIndexedLookup,
 } = require('./query');
+const { SemanticStatement } = require("./semantics");
 
 /**
  * Define the symbol table
@@ -41,22 +43,54 @@ class SymbolTable {
      */
     symbols = {};
     /**
-     * All sentences that the symbols here 
+     * All sentences that the symbols here
      * are involved int
      * @type {Set<Sentence>}
      */
     sentences = new Set();
     /**
-     * A proxy to handle queries to the symbol table
+     * Index from head-symbol name → Set of root sentences with that predicate.
+     * Populated and maintained by sentence() and removeFile().
+     * Enables O(1) first-step lookup instead of O(n) full scan.
+     * @type {Map<string, Set<Sentence>>}
+     */
+    _index = new Map();
+    /**
+     * Deep argument index, populated only when `deepIndex: true` is passed to
+     * the constructor.  Maps each predicate name to an object holding two
+     * sub-indexes:
+     *   a1 — terms[1] name → Set of root sentences
+     *   a2 — terms[2] name → Set of root sentences
+     * Enables level-2 narrowing: lookup.subclass.Human → O(1) instead of
+     * scanning the whole subclass bucket.
+     * @type {Map<string, {a1: Map<string,Set>, a2: Map<string,Set>}>|null}
+     */
+    _index2 = null;
+    /**
+     * A proxy to handle queries to the symbol table.
+     * Initialised in the constructor after all index structures are ready.
      * @type {Proxy}
      */
-    lookup = new Proxy(this.sentences, lookupProxy);
+    lookup = null;
     /**
      * Did someone open the box and look at the cat?
      * Only increment epoch if someone has looked
      * @type {boolean}
      */
     cat = false;
+
+    /**
+     * @param {{ deepIndex?: boolean }} [opts]
+     *   deepIndex – when true, builds a second-level argument-position index
+     *   that narrows predicate buckets to individual argument values, giving
+     *   O(k) query cost (k = matching sentences, usually 1–5) instead of
+     *   O(bucket size).  Slightly increases parse time and memory in exchange
+     *   for dramatically faster cold-cache term property access.
+     */
+    constructor({ deepIndex = false } = {}) {
+        if (deepIndex) this._index2 = new Map();
+        this.lookup = createIndexedLookup(this.sentences, this._index, this._index2);
+    }
 
     get epoch() {
         this.cat = true;
@@ -190,8 +224,40 @@ class SymbolTable {
             newSentence.addTerm(child, childTerm);
         }
         // Only add the sentence to the symboltable if its a root
-        if (!newSentence.parent)
+        if (!newSentence.parent) {
             this.sentences.add(newSentence);
+            const head = newSentence.terms[0];
+            if (head instanceof Symbol) {
+                // Level-1 index: predicate name → Set<Sentence>
+                let bucket = this._index.get(head.name);
+                if (!bucket) this._index.set(head.name, bucket = new Set());
+                bucket.add(newSentence);
+
+                // Level-2 index (optional): predicate → { a1, a2 } argument maps
+                if (this._index2) {
+                    const t = newSentence.terms;
+                    const a1name = t[1] instanceof Symbol ? t[1].name : null;
+                    const a2name = t[2] instanceof Symbol ? t[2].name : null;
+                    if (a1name || a2name) {
+                        let predObj = this._index2.get(head.name);
+                        if (!predObj) {
+                            predObj = { a1: new Map(), a2: new Map() };
+                            this._index2.set(head.name, predObj);
+                        }
+                        if (a1name) {
+                            let s = predObj.a1.get(a1name);
+                            if (!s) predObj.a1.set(a1name, s = new Set());
+                            s.add(newSentence);
+                        }
+                        if (a2name) {
+                            let s = predObj.a2.get(a2name);
+                            if (!s) predObj.a2.set(a2name, s = new Set());
+                            s.add(newSentence);
+                        }
+                    }
+                }
+            }
+        }
     
         // increment the epoch 
         this.epoch = this.#epoch + 1;
@@ -214,6 +280,34 @@ class SymbolTable {
             if (s.node.file === file) {
                 s.deref(null); // root sentences have parent === null
                 this.sentences.delete(s);
+                // Remove from indexes
+                const head = s.terms[0];
+                if (head instanceof Symbol) {
+                    // Level-1
+                    const bucket = this._index.get(head.name);
+                    if (bucket) {
+                        bucket.delete(s);
+                        if (bucket.size === 0) this._index.delete(head.name);
+                    }
+                    // Level-2
+                    if (this._index2) {
+                        const predObj = this._index2.get(head.name);
+                        if (predObj) {
+                            const t = s.terms;
+                            const a1name = t[1] instanceof Symbol ? t[1].name : null;
+                            const a2name = t[2] instanceof Symbol ? t[2].name : null;
+                            if (a1name) {
+                                const b = predObj.a1.get(a1name);
+                                if (b) { b.delete(s); if (!b.size) predObj.a1.delete(a1name); }
+                            }
+                            if (a2name) {
+                                const b = predObj.a2.get(a2name);
+                                if (b) { b.delete(s); if (!b.size) predObj.a2.delete(a2name); }
+                            }
+                            if (!predObj.a1.size && !predObj.a2.size) this._index2.delete(head.name);
+                        }
+                    }
+                }
                 // Increment the epoch
                 this.epoch = this.#epoch + 1;
             }

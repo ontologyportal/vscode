@@ -12,7 +12,7 @@ const {
     parseConfigXml,
     addKBToConfig
 } = require('./sigma/config');
-const { buildWorkspaceDefinitions, setKB } = require('./navigation');
+const { buildWorkspaceDefinitions, setKB } = require('./state');
 
 /** @type {KBTreeProvider} */
 let kbTreeProvider;
@@ -251,10 +251,12 @@ async function createKnowledgeBaseCommand() {
  * @returns 
  */
 function updateActiveEditorContext(editor) {
-    if (!kbTreeProvider || !editor) {
+    if (!editor) {
+        return;
+    }
+    if (!kbTreeProvider) {
         vscode.commands.executeCommand('setContext', 'sumo.inKB', false);
-        setKB(null);
-        return
+        return;
     }
     const kbNodes = kbTreeProvider.kbs;
     const openPath = editor.document.uri.fsPath;
@@ -268,6 +270,7 @@ function updateActiveEditorContext(editor) {
             }
         }
     }
+    console.log("CDCDCDE", openPath);
     vscode.commands.executeCommand('setContext', 'sumo.inKB', false);
     setKB(null);
 }

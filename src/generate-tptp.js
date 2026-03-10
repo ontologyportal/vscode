@@ -6,7 +6,36 @@ const {
     compileFormulas 
 } = require('./sigma');
 const { parseConfigXml } = require('./sigma/config');
-const { getTopLevelExpressions } = require('./prover');
+
+function getTopLevelExpressions(text) {
+    const normalized = text.replace(/\s+/g, ' ');
+    let depth = 0;
+    let current = "";
+    const results = [];
+
+    for (let i = 0; i < normalized.length; i++) {
+        const char = normalized[i];
+        if (char === '(') depth++;
+        if (char === ')') depth--;
+
+        if (depth < 0) {
+            throw new Error(`Unbalanced Parentheses: Extra ')' found at character ${i}`);
+        }
+
+        current += char;
+
+        if (depth === 0 && current.trim()) {
+            results.push(current.trim());
+            current = "";
+        }
+    }
+
+    if (depth > 0) {
+        throw new Error(`Unbalanced Parentheses: Missing ${depth} closing ')' at end of file`);
+    }
+
+    return results;
+}
 
 async function generateTPTPCommand(context) {
     const editor = vscode.window.activeTextEditor;

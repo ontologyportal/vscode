@@ -50,9 +50,6 @@ async function parseConfigXml(configPath) {
             constituents: constituents
         };
     }
-
-    console.log(result);
-
     return result;
 }
 

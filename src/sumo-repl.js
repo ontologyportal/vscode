@@ -3,8 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { getSigmaRuntime, getSigmaHome } = require('./sigma');
-const { getKB } = require('./navigation');
-const { tokenize, parse, validateNode, validateVariables, analyse, syntax, semantics } = require('./validation');
+const { getKB, tokenize, parse, syntax, semantics, getSymbolTable } = require('./state');
 
 /**
  * A basic Pseudoterminal implementation for SUMO Ask/Tell interaction
@@ -470,6 +469,7 @@ class SumoReplTerminal {
     validateFormula(formula) {
         const diagnostics = [];
         try {
+            // Try tokenization and collect errors
             const tokens = tokenize({text: formula}, diagnostics);
             // Mock document for parse()
             const mockDoc = {
@@ -481,10 +481,22 @@ class SumoReplTerminal {
             };
             const ast = parse(tokens, diagnostics);
             if (ast.length > 0) {
-                const {symbolTable} = syntax(ast, diagnostics);
+                const {symbolTable, sentences} = syntax(ast, diagnostics, getSymbolTable());
                 semantics(symbolTable, diagnostics);
-                ast.forEach(node => validateNode(node, diagnostics, terms, mockDoc));
-                validateVariables(ast, diagnostics);
+                try {
+                    sentences.forEach(s => s.forward.validate());
+                } catch (e) {
+                    const pos = new vscode.Position(e.lineStart ?? 0, e.colStart ?? 0);
+                    const endPos = e.lineEnd != null
+                        ? new vscode.Position(e.lineEnd, e.colEnd ?? 0)
+                        : pos.translate(0, 1);
+                    diagnostics.push(new vscode.Diagnostic(
+                        new vscode.Range(pos, endPos),
+                        e.details || e.message,
+                        vscode.DiagnosticSeverity.Error
+                    ));
+                }
+                
             }
         } catch (e) {
             diagnostics.push({ message: e.message });
@@ -517,4 +529,4 @@ function openSumoRepl() {
     terminal.show();
 }
 
-module.exports = { openSumoRepl };
+module.exports = { openSumoRepl, SumoReplTerminal };

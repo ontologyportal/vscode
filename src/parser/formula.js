@@ -25,8 +25,7 @@ class Formula extends SemanticStatement {
         super();
         /** @type {Sentence} */
         this.sentence = sentence;
-        // Set forward statement
-        this.sentence.forward = this;
+        sentence.forward = this;
     }
 
     /** 
@@ -40,7 +39,7 @@ class Formula extends SemanticStatement {
         if (!firstSym || firstSym instanceof Sentence)
             return false;
         /** @type {Term} */
-        const firstTerm = firstSym.forward || (firstSym instanceof Symbol) ? new Term(firstSym) : new SemanticVariable(firstSym);
+        const firstTerm = firstSym.forward;
         return firstTerm.isPredicate;
     }
 
@@ -54,7 +53,7 @@ class Formula extends SemanticStatement {
         if (!firstSym || !(firstSym instanceof Symbol))
             return null;
         /** @type {Term} */
-        const firstTerm = firstSym.forward || new Term(firstSym);
+        const firstTerm = firstSym.forward;
         if (!firstTerm.isFunction)
             return null;
         return firstTerm.validRange();
@@ -62,21 +61,12 @@ class Formula extends SemanticStatement {
 
     get relation() {
         const firstSym = this.sentence.terms[0];
-        const relation = firstSym.forward 
-            || (firstSym instanceof Symbol) ? 
-                  new Term(firstSym) 
-                : new SemanticVariable(firstSym);
+        const relation = firstSym.forward;
         return relation;
     }
 
     get args() {
-        return this.sentence
-            .terms
-            .slice(1)
-            .map(a => {
-                return a.forward || (a instanceof Symbol) ?
-                    new Term(a) : new SemanticVariable(a)
-            });
+        return this.sentence.terms.slice(1).map(a => a.forward);
     }
 
     /**
@@ -128,19 +118,24 @@ class Formula extends SemanticStatement {
             //  the last domain statement applies to the all the ending arguments
             const badDomain = args.findIndex((a, idx) => {
                 if (a instanceof Term)
-                    return relation.validateDomain(a, idx);
+                    return !relation.validateDomain(a, idx);
                 else if (a instanceof Formula)
-                    return relation.validateDomain(a.range, idx);
+                    return !relation.validateDomain(a.range, idx);
                 else if (a instanceof SemanticVariable)
                     return relation.domain[idx] ? a.isInstance !== false : a.isClass !== false
                 else return false;
             });
             if (badDomain >= 0) {
-                throw new SemanticError(this.sentence, `Term '${relation.name}' has the domain ${relation.domain[badDomain].name} for argument #${badDomain + 1} (${args[badDomain].name})`);
+                const domainName = (relation.domain[badDomain] ?? relation.domainSubclass[badDomain]).name;
+                throw new SemanticError(
+                    this.sentence, 
+                    `Term '${relation.name}' has the domain ${domainName} for argument #${badDomain + 1}, which the symbol '${args[badDomain].name}' does not fulfill`);
             }
         }
     }
 }
+
+Sentence.setSemanticType(Formula);
 
 module.exports = {
     Formula

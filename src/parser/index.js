@@ -3,6 +3,7 @@
  */
 const {readFileSync} = require("fs");
 const {
+    Token,
     TokenType,
     tokenize,
     TokenizerError
@@ -45,6 +46,8 @@ const {
     ForAllOperator,
     ExistsOperator
 } = require('./operator');
+const { Formula } = require('./formula');
+const { serialize, deserialize } = require('./serialization');
 
 /**
  * Caller function for processing semantics of a
@@ -103,6 +106,7 @@ function kifFile(file, symbolTable = undefined) {
 }
 
 module.exports = {
+    Token,
     TokenType,
     tokenize,
     NodeType,
@@ -125,6 +129,7 @@ module.exports = {
     SemanticError,
     semantics,
     Operator,
+    Formula,
     AndOperator,
     OrOperator,
     NotOperator,
@@ -134,5 +139,7 @@ module.exports = {
     ForAllOperator,
     ExistsOperator, 
     kif,
-    kifFile
+    kifFile,
+    serialize,
+    deserialize,
 };
