@@ -74,6 +74,13 @@ export interface ListFilesResult {
     files: Array<{ path: string; sentenceCount: number }>;
 }
 
+export interface GenerateTptpResult {
+    /** UTF-8 TPTP source.  The caller writes this to disk. */
+    tptp: string;
+    /** Count of top-level formulae emitted. */
+    formulaCount: number;
+}
+
 interface Pending {
     resolve: (value: unknown) => void;
     reject:  (err: Error) => void;
@@ -234,6 +241,23 @@ export class SumoKernelClient {
     /** Introspection: which files the kernel currently has loaded. */
     async listFiles(): Promise<ListFilesResult> {
         return this.sendRequest<ListFilesResult>('kb.listFiles', {});
+    }
+
+    /**
+     * Compile the active KB (or a subset of its files) to TPTP.
+     * `files` is optional -- when omitted the kernel emits every
+     * file it currently has loaded; when provided, only those paths
+     * are included.  `lang` selects the TPTP dialect (fof / tff / thf).
+     *
+     * The kernel resolves this via the same converter used for
+     * `ask`, so the emitted TPTP is exactly what the prover sees
+     * when the same KB is queried.
+     */
+    async generateTptp(opts: { lang?: string; files?: string[] } = {}): Promise<GenerateTptpResult> {
+        const params: Record<string, unknown> = {};
+        if (opts.lang)  { params.lang  = opts.lang;  }
+        if (opts.files) { params.files = opts.files; }
+        return this.sendRequest<GenerateTptpResult>('kb.generateTptp', params);
     }
 
     /** Stop the kernel gracefully.  Idempotent. */

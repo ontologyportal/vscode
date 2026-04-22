@@ -240,3 +240,47 @@ export function relativiseToKbDir(filePath: string, kbDir: string): string {
     if (rel.startsWith('..') || path.isAbsolute(rel)) { return filePath; }
     return rel;
 }
+
+/**
+ * Append a brand-new `<kb name="…">` entry (optionally with an
+ * initial `<constituent>` list) to `configPath`.  Fails if a KB
+ * with the same name already exists -- the caller should confirm
+ * with the user before overwriting.
+ *
+ * Preserves the order and attributes of every existing node so
+ * the write is a minimal diff.
+ */
+export function createKbEntry(
+    configPath: string,
+    kbName:     string,
+    filenames:  string[],
+): void {
+    const text    = fs.readFileSync(configPath, 'utf8');
+    const parser  = new XMLParser(PARSER_OPTS);
+    const tree    = parser.parse(text);
+    const cfgNode = findNamed(tree, 'configuration');
+    if (!cfgNode) {
+        throw new Error(`config.xml at ${configPath} missing <configuration> root`);
+    }
+
+    const children: any[] = cfgNode.configuration;
+    const existing = children.findIndex(
+        c => 'kb' in c && c[':@']?.['@_name'] === kbName,
+    );
+    if (existing >= 0) {
+        throw new Error(`KB "${kbName}" already exists in ${configPath}`);
+    }
+
+    const constituentChildren = filenames.map(f => ({
+        constituent: [],
+        ':@': { '@_filename': f },
+    }));
+    children.push({
+        kb:  constituentChildren,
+        ':@': { '@_name': kbName },
+    });
+
+    const builder = new XMLBuilder(BUILDER_OPTS);
+    const out     = builder.build(tree);
+    fs.writeFileSync(configPath, out);
+}

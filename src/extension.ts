@@ -72,6 +72,11 @@ import {
 import { showAskResult } from './askWebview';
 import { promptForKbMembership, PromptOutcome } from './prompts';
 import { showTaxonomyCommand } from './taxonomy';
+import { browseInSigmaCommand } from './browseInSigma';
+import { createKbCommand } from './createKb';
+import { formatAxiomCommand } from './formatAxiom';
+import { generateTptpCommand } from './generateTptp';
+import { openReplCommand } from './repl';
 
 let client:        LanguageClient | undefined;
 let outputChannel: OutputChannel  | undefined;
@@ -120,11 +125,16 @@ export async function activate(context: ExtensionContext): Promise<void> {
         commands.registerCommand('sumo.showServerOutput',   () => outputChannel?.show()),
         commands.registerCommand('sumo.kb.load',            onLoadKb),
         commands.registerCommand('sumo.kb.openInNewWindow', onOpenInNewWindow),
+        commands.registerCommand('sumo.kb.create',          () => onCreateKb()),
         commands.registerCommand('sumo.kb.addFile',         onAddFile),
         commands.registerCommand('sumo.kb.removeFile',      onRemoveFile),
         commands.registerCommand('sumo.kb.close',           () => onCloseKb(context)),
         commands.registerCommand('sumo.kb.reloadConfig',    onReloadConfig),
         commands.registerCommand('sumo.kb.showStatus',      () => outputChannel?.show()),
+        commands.registerCommand('sumo.browseInSigma',      () => browseInSigmaCommand(() => state.get())),
+        commands.registerCommand('sumo.formatAxiom',        () => formatAxiomCommand(() => client)),
+        commands.registerCommand('sumo.generateTPTP',       () => onGenerateTptp(context)),
+        commands.registerCommand('sumo.openRepl',           () => openReplCommand(ensureKernel(context))),
         // `sumo.showTaxonomy` may be invoked from the command palette
         // (no argument -- resolves the word under the cursor) or
         // programmatically with an explicit symbol name.
@@ -1244,6 +1254,31 @@ function refreshStatusBar(): void {
                                 `"SUMO: Open KB in New Window" for another.`;
     }
     statusBarItem.show();
+}
+
+// -- Create KB + Generate TPTP wrappers -------------------------------------
+
+async function onCreateKb(): Promise<void> {
+    await createKbCommand(
+        state,
+        () => parsedConfig,
+        () => reloadConfig(),
+        async () => {
+            treeProvider.refresh();
+            refreshStatusBar();
+            await pushActiveFilesToServer();
+        },
+    );
+}
+
+async function onGenerateTptp(context: ExtensionContext): Promise<void> {
+    const active = state.get();
+    if (!active) {
+        window.showInformationMessage('No active knowledge base.  Load one first.');
+        return;
+    }
+    const kernel = ensureKernel(context);
+    await generateTptpCommand(kernel, () => state.get());
 }
 
 // Unused import silencer (ActiveKb is re-exported for the tests
