@@ -244,19 +244,16 @@ export class SumoKernelClient {
     }
 
     /**
-     * Compile the active KB (or a subset of its files) to TPTP.
-     * `files` is optional -- when omitted the kernel emits every
-     * file it currently has loaded; when provided, only those paths
-     * are included.  `lang` selects the TPTP dialect (fof / tff / thf).
+     * Compile the active KB to TPTP.  `lang` selects the dialect
+     * (`fof` | `tff`).
      *
      * The kernel resolves this via the same converter used for
      * `ask`, so the emitted TPTP is exactly what the prover sees
      * when the same KB is queried.
      */
-    async generateTptp(opts: { lang?: string; files?: string[] } = {}): Promise<GenerateTptpResult> {
+    async generateTptp(opts: { lang?: string } = {}): Promise<GenerateTptpResult> {
         const params: Record<string, unknown> = {};
-        if (opts.lang)  { params.lang  = opts.lang;  }
-        if (opts.files) { params.files = opts.files; }
+        if (opts.lang) { params.lang = opts.lang; }
         return this.sendRequest<GenerateTptpResult>('kb.generateTptp', params);
     }
 

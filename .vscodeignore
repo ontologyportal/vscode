@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
 .github/**
+.claude/**
 src/**
 scripts/**
 .gitignore
@@ -8,6 +9,7 @@ scripts/**
 tsconfig.json
 **/*.ts
 **/*.map
+MERGE_REPORT.md
 node_modules/**
 !node_modules/vscode-languageclient/**
 !node_modules/vscode-jsonrpc/**

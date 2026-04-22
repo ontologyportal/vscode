@@ -168,11 +168,10 @@
           "type": "string",
           "enum": [
             "fof",
-            "tff",
-            "thf"
+            "tff"
           ],
           "default": "fof",
-          "description": "TPTP dialect used by 'SUMO: Generate TPTP File' — first-order (fof), typed first-order (tff), or higher-order (thf)."
+          "description": "TPTP dialect used by 'SUMO: Generate TPTP File' — first-order (fof) or typed first-order (tff).  The kernel does not yet emit THF."
         },
         "sumo.diagnostics.ignoredCodes": {
           "type": "array",
