@@ -1,0 +1,153 @@
+# Tag-triggered release workflow: build platform-specific VSIXs
+# bundling two native binaries:
+#
+#   * `sumo-lsp` -- the language server (hover, goto, completion,
+#     diagnostics, taxonomy).  Always spawned on activation.
+#   * `sumo`     -- the ask/tell kernel (the `sumo serve`
+#     subcommand).  Lazily spawned on the first ask/tell.
+#
+# Three inputs are required at release time:
+#
+#   1. Released `sumo-lsp` + `sumo` binary sets in the sumo-parser
+#      repository, tagged `sumo-lsp-vX.Y.Z` and `sumo-vX.Y.Z`.
+#      Each release exposes four platform tarballs / zips + SHA-256
+#      sidecars.  The two versions need not match each other -- the
+#      `*_VERSION` env vars below pin each independently.
+#   2. A tag on *this* repository matching `sumo-vscode-vA.B.C`,
+#      whose version pins declare which upstream releases are
+#      bundled.
+#
+# The workflow downloads both artefacts for each target, drops the
+# binaries into `server/`, and runs `vsce package --target
+# <platform>` for the matching VSCE target.  Platform-specific
+# VSIXs land as release assets on the sumo-vscode tag.
+#
+# Vampire is *not* bundled -- it's an external dependency the user
+# installs separately.  See `server/README.md`.
+#
+# No Marketplace publish -- users install the VSIX via
+# `code --install-extension` or the Marketplace-facing publish
+# step that you'd add once a publisher id exists.
+
+name: Release platform-specific VSIXs
+
+on:
+  push:
+    tags:
+      - 'sumo-vscode-v*'
+
+permissions:
+  contents: write  # upload release assets
+
+env:
+  # sumo-parser release tags whose artefacts we bundle.  Bump these
+  # in lockstep with a new sumo-vscode release; override in the
+  # workflow dispatch if you need to pin historic binaries.  The
+  # two are pinned independently so a kernel bugfix can ship
+  # without rebuilding the LSP.
+  SUMO_LSP_VERSION: "0.1.0"
+  SUMO_KERNEL_VERSION: "0.1.0"
+  # Repo hosting both sets of release tarballs.
+  SUMO_LSP_REPO: "theo-kim/sumo-parser"
+
+jobs:
+  build:
+    name: build / ${{ matrix.vsce-target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vsce-target:  darwin-arm64
+            asset-suffix: darwin-arm64.tar.gz
+            lsp-binary:    sumo-lsp
+            kernel-binary: sumo
+          - vsce-target:  darwin-x64
+            asset-suffix: darwin-x64.tar.gz
+            lsp-binary:    sumo-lsp
+            kernel-binary: sumo
+          - vsce-target:  linux-x64
+            asset-suffix: linux-x64-gnu.tar.gz
+            lsp-binary:    sumo-lsp
+            kernel-binary: sumo
+          - vsce-target:  win32-x64
+            asset-suffix: win32-x64.zip
+            lsp-binary:    sumo-lsp.exe
+            kernel-binary: sumo.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download binaries for ${{ matrix.vsce-target }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Fetch both the language server and the ask/tell kernel,
+        # verify each against its sha256 sidecar, and stage into
+        # `server/`.  The kernel is bundled alongside the LSP so
+        # the extension's ask/tell features work out of the box --
+        # see `src/kernelClient.ts` and `server/README.md`.
+        run: |
+          set -euo pipefail
+
+          fetch_and_stage() {
+              local tag="$1"        # release tag prefix, e.g. 'sumo-lsp' or 'sumo'
+              local version="$2"    # version pinned in env
+              local bin_name="$3"   # e.g. 'sumo-lsp' or 'sumo.exe'
+              local asset="${tag}-v${version}-${{ matrix.asset-suffix }}"
+              local url="https://github.com/${SUMO_LSP_REPO}/releases/download/${tag}-v${version}/${asset}"
+              local hash_url="${url}.sha256"
+
+              echo "Downloading ${url}"
+              curl --fail --location --output "${asset}"         "${url}"
+              curl --fail --location --output "${asset}.sha256"  "${hash_url}"
+
+              # Verify checksum -- fail loudly rather than ship a
+              # corrupted or tampered binary.
+              sha256sum -c --ignore-missing "${asset}.sha256"
+
+              # Extract.  Both tar.gz and zip land a
+              # `${tag}-v<ver>-<platform>/` directory containing
+              # the binary + docs.
+              case "${asset}" in
+                  *.tar.gz) tar -xzf "${asset}" ;;
+                  *.zip)    unzip -q "${asset}" ;;
+              esac
+
+              local srcdir="${tag}-v${version}-${{ matrix.asset-suffix }}"
+              srcdir="${srcdir%.tar.gz}"
+              srcdir="${srcdir%.zip}"
+
+              mkdir -p server
+              cp "${srcdir}/${bin_name}" "server/${bin_name}"
+              chmod +x "server/${bin_name}" || true
+          }
+
+          fetch_and_stage sumo-lsp "${SUMO_LSP_VERSION}"    "${{ matrix.lsp-binary }}"
+          fetch_and_stage sumo     "${SUMO_KERNEL_VERSION}" "${{ matrix.kernel-binary }}"
+          ls -lh server/
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Package VSIX
+        # vsce needs the resolved dep tree on disk (runtime modules
+        # under node_modules/ filtered by .vscodeignore); the
+        # `npm ci` step above already produced it.  Don't pass
+        # `--no-dependencies` or the VSIX ships without
+        # vscode-languageclient and fails to activate.
+        run: npx --no vsce package --target ${{ matrix.vsce-target }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.vsix'
+          draft: false
+          generate_release_notes: true
