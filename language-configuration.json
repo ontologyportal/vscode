@@ -17,11 +17,5 @@
         "increaseIndentPattern": "\\([^)]*$",
         "decreaseIndentPattern": "^\\s*\\)"
     },
-    "folding": {
-        "markers": {
-            "start": "^\\s*\\(",
-            "end":   "^\\s*\\)"
-        }
-    },
     "wordPattern": "[?@]?[A-Za-z_][A-Za-z0-9_\\-]*"
 }
