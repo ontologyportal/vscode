@@ -305,7 +305,16 @@ async function startClient(context: ExtensionContext): Promise<void> {
         synchronize: {
             fileEvents: workspace.createFileSystemWatcher('**/*.{kif,kif.tq}'),
         },
-        initializationOptions: {},
+        // `clientManagesFiles` tells the server not to run its
+        // initial workspace sweep.  Without this, `sumo-lsp` loads
+        // every .kif under the workspace roots and the subsequent
+        // `sumo/setActiveFiles` call has to un-load the ones that
+        // don't belong to the active KB — each `remove_file` is
+        // O(total occurrences), so larger workspaces starve the
+        // event loop for minutes before any request goes through.
+        initializationOptions: {
+            clientManagesFiles: true,
+        },
     };
 
     client = new LanguageClient('sumo-lsp', 'SUMO / KIF', serverOptions, clientOptions);
