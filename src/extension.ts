@@ -78,6 +78,7 @@ import { createKbCommand } from './createKb';
 import { formatAxiomCommand } from './formatAxiom';
 import { generateTptpCommand } from './generateTptp';
 import { openReplCommand } from './repl';
+import { applyInactiveKbExcludes, clearInactiveKbExcludes } from './hideInactive';
 
 let client:        LanguageClient | undefined;
 let outputChannel: OutputChannel  | undefined;
@@ -190,6 +191,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
             if (e.affectsConfiguration('sumo.trace.server')) {
                 await applyTraceLevel();
             }
+            if (e.affectsConfiguration('sumo.hideInactiveKbFiles')) {
+                await refreshInactiveKbExcludes();
+            }
         }),
     );
 
@@ -222,6 +226,16 @@ export async function deactivate(): Promise<void> {
     // Snapshot the active KB BEFORE we tear down so we can tell
     // whether an ephemeral LMDB needs deleting.
     const active = state?.get() ?? null;
+
+    // Clear any `files.exclude` entries we added for
+    // `sumo.hideInactiveKbFiles`.  Best-effort: if the write fails
+    // we log but don't block shutdown.
+    if (extensionContext) {
+        try { await clearInactiveKbExcludes(extensionContext); }
+        catch (err) {
+            outputChannel?.appendLine(`[extension] exclude cleanup failed: ${err}`);
+        }
+    }
 
     await Promise.allSettled([
         stopClient(),
@@ -449,6 +463,23 @@ async function pushActiveFilesToServer(): Promise<void> {
         await client.sendNotification('sumo/setActiveFiles', { files });
     } catch (err) {
         outputChannel?.appendLine(`[extension] setActiveFiles failed: ${err}`);
+    }
+    // Keep the workspace file-explorer's hidden set aligned with
+    // the active KB.  Cheap when the feature is off (early-return
+    // after a config read).
+    await refreshInactiveKbExcludes();
+}
+
+/**
+ * Re-apply `files.exclude` entries derived from the current
+ * active KB.  No-op when `sumo.hideInactiveKbFiles` is false.
+ */
+async function refreshInactiveKbExcludes(): Promise<void> {
+    if (!extensionContext) { return; }
+    try {
+        await applyInactiveKbExcludes(extensionContext, state.get()?.files ?? null);
+    } catch (err) {
+        outputChannel?.appendLine(`[extension] hideInactiveKbFiles refresh failed: ${err}`);
     }
 }
 
