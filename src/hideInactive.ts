@@ -1,12 +1,15 @@
 // Dynamically hide .kif files that aren't constituents of the
 // active knowledge base from the VSCode file explorer.
 //
-// Strategy: manage entries in the workspace's `files.exclude`
-// map.  VSCode anchors glob keys at each workspace-folder root,
-// so we emit one entry per non-active .kif (relative to its
-// containing folder).  The keys we've added are tracked in
-// workspaceState so we can undo them on KB change, config toggle,
-// or extension deactivation.
+// Strategy: manage entries in each workspace-folder's
+// `files.exclude` map.  VSCode anchors glob keys at the folder
+// root, and the Explorer only honours WorkspaceFolder-scoped
+// excludes for per-folder subtree filtering.  So we compute one
+// entry per non-active .kif under each folder, relative to that
+// folder, and write to `ConfigurationTarget.WorkspaceFolder`.
+// The keys we've added are tracked in workspaceState so we can
+// undo them on KB change, config toggle, or extension
+// deactivation.
 //
 // Opt-in via `sumo.hideInactiveKbFiles`.  Users who want a
 // read-only git-tracked exclusion list can still edit
@@ -26,18 +29,25 @@ import {
 /// we can clean up entries we added in a previous session.
 const STATE_KEY = 'sumo.hiddenKbExcludes';
 
+let logger: ((msg: string) => void) | undefined;
+
+/**
+ * Wire a logger (e.g. the SUMO output channel).  Without this,
+ * the module silently no-ops on diagnostic messages — fine for
+ * tests, but unhelpful for users asking "why isn't this working".
+ */
+export function setInactiveKbLogger(fn: (msg: string) => void): void {
+    logger = fn;
+}
+
 /**
  * Recompute `files.exclude` to reflect `activeFiles`.
  *
  * - When the feature is disabled (or there's no active KB), any
  *   keys we previously added are removed.
  * - When it's enabled and a KB is active, every `.kif` in the
- *   workspace that isn't in `activeFiles` gets a hide-entry.
- *
- * Writes to `ConfigurationTarget.Workspace` — that lands in
- * `.vscode/settings.json` (or the `.code-workspace` file) rather
- * than the user's global settings, so toggling the feature
- * doesn't leak between projects.
+ *   workspace that isn't in `activeFiles` gets a hide-entry on
+ *   its containing folder.
  */
 export async function applyInactiveKbExcludes(
     context:     ExtensionContext,
@@ -46,65 +56,92 @@ export async function applyInactiveKbExcludes(
     const enabled = workspace.getConfiguration('sumo')
         .get<boolean>('hideInactiveKbFiles', false);
 
-    const filesCfg = workspace.getConfiguration('files');
-    const current  = { ...(filesCfg.get<Record<string, boolean>>('exclude', {})) };
-
-    // Strip our prior entries first.  If a user flipped them from
-    // `true` to `false` by hand, leave the manual override alone --
-    // we only clean what we own AND still matches our expected
-    // shape (plain boolean-true hide).
     const prior: string[] = context.workspaceState.get(STATE_KEY, []);
-    for (const key of prior) {
-        if (current[key] === true) { delete current[key]; }
+    const folders = workspace.workspaceFolders ?? [];
+
+    // If there are no folders (rare, usually a "no folder open"
+    // window), nothing to do — the explorer isn't showing anything
+    // to filter.  Still clear prior keys for cleanliness.
+    if (folders.length === 0) {
+        logger?.('[hideInactive] no workspace folders; nothing to apply');
+        await context.workspaceState.update(STATE_KEY, []);
+        return;
     }
 
+    // Collect the set of new keys (relative globs) we'll want to
+    // apply per-folder.  Key shape: `${folderIdx}\0${rel}` so the
+    // reverse pass knows which folder a historical key belongs to.
     const newKeys: string[] = [];
+    const perFolderNew: Map<number, Set<string>> = new Map();
+    folders.forEach((_, i) => perFolderNew.set(i, new Set()));
+
+    let kifsFound = 0;
+    let outOfScope = 0;
 
     if (enabled && activeFiles && activeFiles.size > 0) {
         const activeAbs = new Set<string>(
             Array.from(activeFiles).map(p => path.resolve(p)),
         );
 
-        // Find every .kif in the workspace.  `findFiles` respects
-        // `files.exclude`, but since we're about to overwrite that
-        // map anyway, the prior state doesn't influence the query.
         const kifs = await workspace.findFiles('**/*.{kif,kif.tq}');
-
-        const folders = workspace.workspaceFolders ?? [];
+        kifsFound = kifs.length;
 
         for (const uri of kifs) {
             if (uri.scheme !== 'file') { continue; }
             const abs = path.resolve(uri.fsPath);
             if (activeAbs.has(abs)) { continue; }
 
-            // Anchor the glob at whichever workspace folder
-            // contains the file.  Files outside every folder fall
-            // through unchanged (nothing to hide from).
-            const folder = folders
-                .find(f => abs === f.uri.fsPath || abs.startsWith(f.uri.fsPath + path.sep));
-            if (!folder) { continue; }
+            const folderIdx = folders.findIndex(f =>
+                abs === f.uri.fsPath || abs.startsWith(f.uri.fsPath + path.sep));
+            if (folderIdx < 0) { outOfScope++; continue; }
 
-            const rel  = path.relative(folder.uri.fsPath, abs);
+            const rel = path.relative(folders[folderIdx].uri.fsPath, abs);
             if (rel === '' || rel.startsWith('..')) { continue; }
-            // `files.exclude` globs always use forward slashes,
-            // even on Windows.  Normalise.
             const glob = rel.split(path.sep).join('/');
 
-            current[glob] = true;
-            newKeys.push(glob);
+            perFolderNew.get(folderIdx)!.add(glob);
+            newKeys.push(`${folderIdx}\0${glob}`);
         }
     }
 
-    await filesCfg.update('exclude', current, ConfigurationTarget.Workspace);
+    // Apply per folder.  For each folder: read its files.exclude
+    // (at the WorkspaceFolder scope), strip our prior entries,
+    // add the new ones, write back.
+    for (let i = 0; i < folders.length; i++) {
+        const folderCfg  = workspace.getConfiguration('files', folders[i].uri);
+        const inspection = folderCfg.inspect<Record<string, boolean>>('exclude');
+        const folderExclude: Record<string, boolean> = {
+            ...(inspection?.workspaceFolderValue ?? {}),
+        };
+
+        // Remove prior entries that belong to this folder.
+        for (const key of prior) {
+            const [idxStr, glob] = key.split('\0');
+            if (Number(idxStr) !== i) { continue; }
+            if (folderExclude[glob] === true) { delete folderExclude[glob]; }
+        }
+
+        // Add new entries for this folder.
+        for (const glob of perFolderNew.get(i) ?? []) {
+            folderExclude[glob] = true;
+        }
+
+        await folderCfg.update('exclude', folderExclude,
+            ConfigurationTarget.WorkspaceFolder);
+    }
+
     await context.workspaceState.update(STATE_KEY, newKeys);
+
+    logger?.(
+        `[hideInactive] enabled=${enabled} active=${activeFiles?.size ?? 0} ` +
+        `kifs-found=${kifsFound} hidden=${newKeys.length} ` +
+        `out-of-scope=${outOfScope} folders=${folders.length}`,
+    );
 }
 
 /**
- * Called on extension deactivation.  Synchronous best-effort
- * cleanup: tries to strip our entries so the user doesn't land
- * back in a window with stale excludes.  `deactivate` has ~5 s
- * before VSCode force-kills, which is plenty for a config
- * write.
+ * Called on extension deactivation.  Best-effort cleanup so the
+ * user doesn't land in a window with stale excludes.
  */
 export async function clearInactiveKbExcludes(context: ExtensionContext): Promise<void> {
     await applyInactiveKbExcludes(context, null);

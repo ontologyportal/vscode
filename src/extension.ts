@@ -78,7 +78,7 @@ import { createKbCommand } from './createKb';
 import { formatAxiomCommand } from './formatAxiom';
 import { generateTptpCommand } from './generateTptp';
 import { openReplCommand } from './repl';
-import { applyInactiveKbExcludes, clearInactiveKbExcludes } from './hideInactive';
+import { applyInactiveKbExcludes, clearInactiveKbExcludes, setInactiveKbLogger } from './hideInactive';
 
 let client:        LanguageClient | undefined;
 let outputChannel: OutputChannel  | undefined;
@@ -101,6 +101,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     extensionContext = context;
     outputChannel = window.createOutputChannel('SUMO / KIF');
     context.subscriptions.push(outputChannel);
+    setInactiveKbLogger(msg => outputChannel?.appendLine(msg));
 
     state        = new KbState();
     treeProvider = new KbTreeProvider(state);
