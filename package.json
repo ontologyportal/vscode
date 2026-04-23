@@ -352,11 +352,20 @@
         "when": "editorLangId == kif"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sumoActivityBar",
+          "title": "SUMO",
+          "icon": "./images/extension-icon.png"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "sumoActivityBar": [
         {
           "id": "sumoKnowledgeBases",
-          "name": "SUMO Knowledge Bases",
+          "name": "Knowledge Base",
           "icon": "$(library)"
         }
       ]
