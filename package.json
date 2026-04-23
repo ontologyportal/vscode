@@ -164,12 +164,6 @@
           "minimum": 1,
           "description": "Seconds the theorem prover is allowed to run for a single `ask` before returning a Timeout verdict."
         },
-        "sumo.hideInactiveKbFiles": {
-          "type": "boolean",
-          "default": false,
-          "scope": "window",
-          "description": "When on, the workspace file explorer hides every .kif / .kif.tq that isn't a constituent of the active knowledge base.  Managed by the extension via the `files.exclude` setting: entries are added on KB load / add-file, removed on KB close / switch / disable, and cleaned up on extension deactivation.  This will cause the extension to write into the workspace's `.vscode/settings.json` (or `.code-workspace`) whenever the active KB changes."
-        },
         "sumo.tptp.lang": {
           "type": "string",
           "enum": [
@@ -363,8 +357,7 @@
         {
           "id": "sumoKnowledgeBases",
           "name": "SUMO Knowledge Bases",
-          "icon": "$(library)",
-          "when": "workspaceContains:**/*.kif || editorLangId == kif"
+          "icon": "$(library)"
         }
       ]
     },
