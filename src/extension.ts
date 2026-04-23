@@ -56,6 +56,7 @@ import {
     ServerOptions,
     Executable,
     TransportKind,
+    Trace,
 } from 'vscode-languageclient/node';
 
 import { ParsedConfig, parseConfigXml, relativiseToKbDir, resolveConfigPath,
@@ -186,6 +187,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
             if (e.affectsConfiguration('sumo.diagnostics.ignoredCodes')) {
                 await pushIgnoredDiagnosticsToServer();
             }
+            if (e.affectsConfiguration('sumo.trace.server')) {
+                await applyTraceLevel();
+            }
         }),
     );
 
@@ -311,6 +315,11 @@ async function startClient(context: ExtensionContext): Promise<void> {
     try {
         await client.start();
         outputChannel?.appendLine('[extension] sumo-lsp ready');
+        // Apply the user's trace level.  `vscode-languageclient`
+        // derives its auto-bound trace config key from the client
+        // ID (`sumo-lsp`), not from our user-facing `sumo.*`
+        // namespace, so the setting is wired programmatically here.
+        await applyTraceLevel();
         await pushActiveFilesToServer();
         // Re-push the ignore-list after every (re)start so a
         // freshly-spawned server immediately honours the user's
@@ -884,6 +893,30 @@ async function pushIgnoredDiagnosticsToServer(): Promise<void> {
             `[extension] setIgnoredDiagnostics: ${codes.length} code(s) ignored`);
     } catch (err) {
         outputChannel?.appendLine(`[extension] setIgnoredDiagnostics failed: ${err}`);
+    }
+}
+
+/**
+ * Apply the user's `sumo.trace.server` setting to the running
+ * client.  `vscode-languageclient` auto-wires tracing from a key
+ * derived from the client ID (`sumo-lsp.trace.server`), which
+ * mismatches our user-facing `sumo.*` namespace -- so we read the
+ * config ourselves and call `client.setTrace` to keep the key in
+ * our own namespace.
+ */
+async function applyTraceLevel(): Promise<void> {
+    if (!client) { return; }
+    const level = workspace.getConfiguration('sumo')
+        .get<string>('trace.server', 'off').toLowerCase();
+    const trace = level === 'verbose'  ? Trace.Verbose
+                : level === 'messages' ? Trace.Messages
+                : level === 'compact'  ? Trace.Compact
+                :                        Trace.Off;
+    try {
+        await client.setTrace(trace);
+        outputChannel?.appendLine(`[extension] trace level: ${level}`);
+    } catch (err) {
+        outputChannel?.appendLine(`[extension] setTrace failed: ${err}`);
     }
 }
 
