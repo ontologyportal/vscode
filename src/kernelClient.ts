@@ -79,6 +79,59 @@ export interface GenerateTptpResult {
     tptp: string;
     /** Count of top-level formulae emitted. */
     formulaCount: number;
+    /** Echo of the resolved dialect.  Present since kernel v1.x. */
+    lang?: string;
+}
+
+/**
+ * One axiom that contributed to a refutation.  Populated only when
+ * the kernel returns `status === "Inconsistent"` AND Vampire emitted
+ * a traceable proof transcript.
+ */
+export interface ContradictionEntry {
+    sid:  number;
+    file: string;
+    /** 1-based line number in `file`. */
+    line: number;
+    kif:  string;
+}
+
+/**
+ * One step in the proof transcript returned by `debug`.  Same shape
+ * as the subprocess `--proof kif` output on the CLI.
+ */
+export interface DebugProofStepEntry {
+    index:       number;
+    rule:        string;
+    premises:    number[];
+    formula:     string;
+    sourceSid?:  number;
+    sourceFile?: string;
+    sourceLine?: number;
+}
+
+export interface DebugResult {
+    /** Resolved file tag (may differ from the requested `file`
+     *  when basename matching resolved to a loaded absolute path). */
+    file:           string;
+    rootSentences:  number;
+    sampled:        number;
+    sineExpanded:   number;
+    totalChecked:   number;
+    tolerance:      number;
+    /** Other KB files from which SInE pulled axioms. */
+    filesPulled:    string[];
+    /** One of `Consistent`, `Inconsistent`, `Timeout`, `Unknown`. */
+    status:         string;
+    /** Populated only when `status === "Inconsistent"` AND Vampire
+     *  emitted a traceable refutation.  Empty otherwise. */
+    contradictions: ContradictionEntry[];
+    /** Full KIF proof transcript.  Empty when no refutation was
+     *  produced. */
+    proofKif:       DebugProofStepEntry[];
+    /** Raw prover transcript — useful for debugging when the
+     *  structured paths above return nothing. */
+    raw:            string;
 }
 
 interface Pending {
@@ -241,6 +294,37 @@ export class SumoKernelClient {
     /** Introspection: which files the kernel currently has loaded. */
     async listFiles(): Promise<ListFilesResult> {
         return this.sendRequest<ListFilesResult>('kb.listFiles', {});
+    }
+
+    /**
+     * Consistency-check `filePath` against the rest of the loaded
+     * KB via SInE + Vampire.  Same flow as `sumo debug` from the CLI.
+     *
+     * The kernel resolves `file` against loaded KB tags using a
+     * three-tier strategy: exact string → canonicalised absolute
+     * path → basename suffix.  Passing an absolute path is the
+     * recommended form (what the extension uses elsewhere).
+     *
+     * `thoroughness` ∈ (0.0, 1.0] controls random subsampling;
+     * `scope` is the SInE tolerance (default ≈ 2.0).  `timeoutSecs`
+     * defaults to 60.
+     *
+     * Throws on transport failure or on a server-side `-32602`
+     * (e.g. file not loaded in the KB).  Successful calls return
+     * a `DebugResult` whose `status` field carries the verdict —
+     * `"Timeout"` and `"Unknown"` are non-error outcomes the caller
+     * surfaces as status dialogs, not error toasts.
+     */
+    async debug(filePath: string, opts: {
+        thoroughness?: number;
+        scope?:        number;
+        timeoutSecs?:  number;
+    } = {}): Promise<DebugResult> {
+        const params: Record<string, unknown> = { file: filePath };
+        if (opts.thoroughness !== undefined) { params.thoroughness = opts.thoroughness; }
+        if (opts.scope        !== undefined) { params.scope        = opts.scope; }
+        if (opts.timeoutSecs  !== undefined) { params.timeoutSecs  = opts.timeoutSecs; }
+        return this.sendRequest<DebugResult>('debug', params);
     }
 
     /**

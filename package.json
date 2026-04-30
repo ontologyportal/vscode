@@ -141,7 +141,7 @@
         "sumo.kernel.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the `sumo` binary used for ask/tell/tptp (the `sumo serve` subcommand).  Defaults to the bundled binary; falls back to `sumo` on PATH.  Set to an absolute path for a local debug build."
+          "description": "Path to the `sigmakee` binary used for ask/tell/tptp/debug (the `sigmakee serve` subcommand).  When empty, the extension looks for `sigmakee` on your PATH.  Set to an absolute path to pin a specific build.  See the releases page on GitHub for prebuilt binaries."
         },
         "sumo.kernel.dbPath": {
           "type": "string",
@@ -336,6 +336,11 @@
         "command": "sumo.kernel.showFileStatus",
         "title": "SUMO: Show Kernel File Status",
         "category": "SUMO"
+      },
+      {
+        "command": "sumo.debug.file",
+        "title": "SUMO: Consistency-Check File",
+        "category": "SUMO"
       }
     ],
     "keybindings": [
@@ -418,7 +423,7 @@
         },
         {
           "command": "sumo.ask.cursor",
-          "when": "editorLangId == kif",
+          "when": "editorLangId == kif && sumo.kernelAvailable",
           "group": "navigation@11"
         },
         {
@@ -433,13 +438,52 @@
         },
         {
           "command": "sumo.generateTPTP",
-          "when": "editorLangId == kif",
+          "when": "editorLangId == kif && sumo.kernelAvailable",
           "group": "2_export@1"
         },
         {
           "command": "sumo.openRepl",
-          "when": "editorLangId == kif",
+          "when": "editorLangId == kif && sumo.kernelAvailable",
           "group": "2_export@2"
+        },
+        {
+          "command": "sumo.debug.file",
+          "when": "editorLangId == kif && sumo.kernelAvailable",
+          "group": "2_export@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sumo.ask.cursor",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.openRepl",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.generateTPTP",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.debug.file",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.kernel.restart",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.kernel.rebuildDatabase",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.kernel.reconcileOpenFiles",
+          "when": "sumo.kernelAvailable"
+        },
+        {
+          "command": "sumo.kernel.showFileStatus",
+          "when": "sumo.kernelAvailable"
         }
       ]
     }

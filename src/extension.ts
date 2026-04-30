@@ -41,6 +41,7 @@ import {
     window,
     workspace,
     commands,
+    languages,
     StatusBarAlignment,
     StatusBarItem,
     ExtensionContext,
@@ -78,6 +79,8 @@ import { createKbCommand } from './createKb';
 import { formatAxiomCommand } from './formatAxiom';
 import { generateTptpCommand } from './generateTptp';
 import { openReplCommand } from './repl';
+import { onDebugFile } from './debugCommand';
+import { checkKernelHealth, KernelHealth, RELEASES_URL } from './kernelHealth';
 
 let client:        LanguageClient | undefined;
 let outputChannel: OutputChannel  | undefined;
@@ -86,6 +89,24 @@ let treeProvider:  KbTreeProvider;
 let statusBarItem: StatusBarItem;
 let parsedConfig:  ParsedConfig | null = null;
 let kernelClient:  SumoKernelClient | undefined;
+/**
+ * Dedicated collection for contradictions surfaced by the
+ * `sumo.debug.file` command.  Kept separate from `sumo-lsp`'s
+ * parse / semantic diagnostics so the two never fight — VSCode
+ * overlays them naturally in the Problems panel.  Cleared before
+ * each debug run and whenever the active KB changes, so stale red
+ * squiggles never linger past the condition that produced them.
+ */
+let debugDiagnostics: import('vscode').DiagnosticCollection | undefined;
+
+/**
+ * Latest result of the kernel health check.  Populated by
+ * `refreshKernelHealth()` at activation and on every
+ * `sumo.kernel.path` config change.  When `status !== 'ok'` the
+ * RPC-dependent commands are hidden from the palette via a
+ * context-variable gate (`sumo.kernelAvailable`).
+ */
+let kernelHealth: KernelHealth | undefined;
 /**
  * Captured at `activate()` so `deactivate()` (which VSCode calls
  * without arguments) can still resolve ephemeral LMDB paths for
@@ -111,6 +132,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
     statusBarItem.command = 'sumo.kb.showStatus';
     context.subscriptions.push(statusBarItem);
     refreshStatusBar();
+
+    // Diagnostic collection for `sumo.debug.file` contributions.
+    // Separate from the LSP's `sumo-lsp`-sourced diagnostics so the
+    // two channels stay independent; cleared before every debug run
+    // and on any KB change so stale contradictions don't linger.
+    debugDiagnostics = languages.createDiagnosticCollection('sumo-debug');
+    context.subscriptions.push(debugDiagnostics);
 
     reloadConfig();
 
@@ -151,6 +179,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         commands.registerCommand('sumo.kernel.deleteDatabase',  () => onDeleteKernelDb(context)),
         commands.registerCommand('sumo.kernel.reconcileOpenFiles', () => onReconcileOpenFiles(context)),
         commands.registerCommand('sumo.kernel.showFileStatus',  () => onShowKernelFileStatus(context)),
+        commands.registerCommand('sumo.debug.file',             () => onDebugActiveFile(context)),
     );
 
     // File watcher: keep the kernel's DB in sync with disk.
@@ -190,6 +219,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
             if (e.affectsConfiguration('sumo.trace.server')) {
                 await applyTraceLevel();
             }
+            if (e.affectsConfiguration('sumo.kernel.path')) {
+                // User pointed us at a new binary — re-classify its
+                // health so the palette gate reflects reality.  A
+                // previously-missing binary becoming available
+                // re-enables every RPC command on the spot; no
+                // window reload required.
+                await refreshKernelHealth();
+            }
         }),
     );
 
@@ -208,6 +245,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // starts out agreeing with the UI.  No-op when the list is
     // empty; the server's default is an empty set anyway.
     await pushIgnoredDiagnosticsToServer();
+
+    // Eagerly probe the `sigmakee` kernel binary.  Surface any
+    // problem (missing, no-serve, crash) as a dialog and flip the
+    // `sumo.kernelAvailable` context variable so the Command
+    // Palette hides every kernel-dependent command until the user
+    // fixes the install.
+    await refreshKernelHealth();
 
     // Any editors that were already open at activation get
     // classified after the bootstrap so they see the active KB.
@@ -450,6 +494,11 @@ async function pushActiveFilesToServer(): Promise<void> {
     } catch (err) {
         outputChannel?.appendLine(`[extension] setActiveFiles failed: ${err}`);
     }
+    // A KB mutation invalidates any prior debug run — contradictions
+    // discovered against the old file set can become phantom
+    // against the new one.  Clearing here keeps the Problems panel
+    // honest without requiring the user to re-run debug.
+    debugDiagnostics?.clear();
 }
 
 // -- Kernel (ask/tell) lifecycle ---------------------------------------------
@@ -474,8 +523,12 @@ function ensureKernel(context: ExtensionContext): SumoKernelClient {
  * Decide what binary to run, what database to open, and what KIF
  * files to pre-load.
  *
- * Binary: same resolution chain as the LSP (`sumo.kernel.path`
- * override → bundled binary → `sumo` on PATH).
+ * Binary: `sumo.kernel.path` override → `sigmakee` on PATH.  The
+ * extension doesn't bundle the kernel binary — users install it
+ * separately via a prebuilt release or a source build.  The
+ * activation-time health check (`refreshKernelHealth`) catches a
+ * missing / wrong-feature-set binary before commands that would
+ * hit this resolver are invokable.
  *
  * Database: unless `sumo.kernel.disableCache` is on, the LMDB path
  * is auto-derived from the active KB (see `kernelDb.ts`).  Config
@@ -497,14 +550,12 @@ function resolveKernelSpawn(context: ExtensionContext): { command: string; args:
     if (override.length > 0) {
         command = resolvePathString(override, context);
     } else {
-        // Mirror the LSP's bundled-binary fallback: the packaged
-        // VSIX ships `server/sumo` alongside `server/sumo-lsp`.
-        const bundled = bundledKernelPath(context);
-        if (bundled && fs.existsSync(bundled)) {
-            command = bundled;
-        } else {
-            command = 'sumo';
-        }
+        // No override → rely on PATH.  `refreshKernelHealth` has
+        // already verified the binary is findable (or blocked the
+        // command that got us here).  If this resolver is somehow
+        // reached with no binary available, spawn will fail and
+        // the client surfaces the error.
+        command = 'sigmakee';
     }
 
     const args: string[] = ['serve'];
@@ -550,10 +601,107 @@ function resolveKernelSpawn(context: ExtensionContext): { command: string; args:
     return { command, args };
 }
 
-function bundledKernelPath(context: ExtensionContext): string | undefined {
-    if (!context.extensionPath) { return undefined; }
-    const name = process.platform === 'win32' ? 'sumo.exe' : 'sumo';
-    return path.join(context.extensionPath, 'server', name);
+// -- Kernel health check -----------------------------------------------------
+
+/**
+ * Run the kernel health probe and update both the cached
+ * `kernelHealth` struct and the `sumo.kernelAvailable` context
+ * variable.  On any non-`ok` result, surface a status-appropriate
+ * error dialog pointing the user at the fix.
+ *
+ * Safe to call repeatedly — each invocation replaces the previous
+ * result.  Throttling isn't needed because the check is bounded
+ * (5 s timeout + `--help` probe); a user who changes
+ * `sumo.kernel.path` in quick succession can hit the probe a few
+ * times per second and it won't pile up.
+ */
+async function refreshKernelHealth(): Promise<void> {
+    const config = workspace.getConfiguration('sumo');
+    outputChannel?.appendLine('[extension] running kernel health check');
+    const health = await checkKernelHealth(config, outputChannel!);
+    kernelHealth = health;
+
+    // Flip the palette gate.  VSCode reads context variables
+    // synchronously when evaluating `when` clauses, so the command
+    // palette picks up the new value on the next menu open.
+    await commands.executeCommand(
+        'setContext',
+        'sumo.kernelAvailable',
+        health.status === 'ok',
+    );
+
+    if (health.status === 'ok') {
+        outputChannel?.appendLine(`[extension] kernel available at ${health.binaryPath}`);
+        return;
+    }
+
+    // Dispatch by failure tier so each dialog offers the right
+    // action.  The dialog is fire-and-forget — we don't await the
+    // user's choice (other than the button callbacks); activation
+    // continues regardless.
+    presentKernelHealthDialog(health);
+}
+
+/**
+ * Show a status-appropriate error dialog for a non-`ok` health
+ * result.  Each dialog offers one primary action + a passive
+ * "Show Output" option that reveals the output channel where the
+ * full diagnostic lives.
+ */
+function presentKernelHealthDialog(health: KernelHealth): void {
+    if (health.status === 'ok') { return; }   // shouldn't happen; defensive
+
+    switch (health.status) {
+        case 'missing': {
+            void window.showErrorMessage(
+                `SUMO kernel binary not found.  ${health.reason}`,
+                'Download…',
+                'Open Settings',
+                'Show Output',
+            ).then(choice => {
+                if (choice === 'Download…') {
+                    void commands.executeCommand('vscode.open', Uri.parse(RELEASES_URL));
+                } else if (choice === 'Open Settings') {
+                    void commands.executeCommand('workbench.action.openSettings', 'sumo.kernel.path');
+                } else if (choice === 'Show Output') {
+                    outputChannel?.show(true);
+                }
+            });
+            return;
+        }
+
+        case 'no-serve': {
+            void window.showErrorMessage(
+                `SUMO kernel is missing the RPC server feature.  ${health.reason}`,
+                'Download…',
+                'Show Output',
+            ).then(choice => {
+                if (choice === 'Download…') {
+                    void commands.executeCommand('vscode.open', Uri.parse(RELEASES_URL));
+                } else if (choice === 'Show Output') {
+                    outputChannel?.show(true);
+                }
+            });
+            return;
+        }
+
+        case 'crash': {
+            // Dump the full stderr/OS-error into the output channel
+            // so the user sees it even if the modal's truncated
+            // summary buries the real cause.
+            outputChannel?.appendLine(`[extension] kernel start failed: ${health.detail}`);
+            void window.showErrorMessage(
+                `SUMO kernel failed to start at ${health.binaryPath}: ${health.reason}\n\n${health.detail}`,
+                { modal: false },
+                'Show Output',
+            ).then(choice => {
+                if (choice === 'Show Output') {
+                    outputChannel?.show(true);
+                }
+            });
+            return;
+        }
+    }
 }
 
 async function onAskCursor(context: ExtensionContext): Promise<void> {
@@ -591,6 +739,24 @@ async function onAskCursor(context: ExtensionContext): Promise<void> {
         outputChannel?.appendLine(`[extension] ask failed: ${err}`);
         window.showErrorMessage(`Ask failed: ${String(err)}`);
     }
+}
+
+/**
+ * Wrapper for the `sumo.debug.file` command.  Ensures the kernel
+ * is spawned + the shared `debugDiagnostics` collection is
+ * present, then delegates to `onDebugFile`.  Degrades gracefully
+ * when activation didn't create the collection (shouldn't happen
+ * in practice — `activate()` always does — but keeps the handler
+ * resilient if the order ever changes).
+ */
+async function onDebugActiveFile(context: ExtensionContext): Promise<void> {
+    if (!debugDiagnostics) {
+        window.showErrorMessage(
+            'SUMO: debug diagnostics not initialised.  Try reloading the window.');
+        return;
+    }
+    const kernel = ensureKernel(context);
+    await onDebugFile(context, kernel, debugDiagnostics);
 }
 
 async function onRestartKernel(context: ExtensionContext): Promise<void> {
