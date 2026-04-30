@@ -1,6 +1,8 @@
 .claude/
 *.vsix
-node_modules
+node_modules/
 dist/
-test/Merge.kif
+out/
 .vscode-test/
+# macOS dotfiles
+.DS_Store

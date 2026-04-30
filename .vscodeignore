@@ -1,9 +1,37 @@
 .vscode/**
 .vscode-test/**
-.git/**
-.gitignore
+.github/**
 .claude/**
+src/**
+scripts/**
+.gitignore
+.eslintrc.json
+tsconfig.json
+**/*.ts
+**/*.map
+MERGE_REPORT.md
 node_modules/**
-test/**
-*.vsix
-package-lock.json
+!node_modules/vscode-languageclient/**
+!node_modules/vscode-jsonrpc/**
+!node_modules/vscode-languageserver-protocol/**
+!node_modules/vscode-languageserver-types/**
+!node_modules/semver/**
+!node_modules/minimatch/**
+!node_modules/brace-expansion/**
+!node_modules/balanced-match/**
+!node_modules/concat-map/**
+!node_modules/fast-xml-parser/**
+!node_modules/strnum/**
+# Mermaid + svg-pan-zoom are loaded as pre-bundled UMD scripts
+# inside the Taxonomy webview.  Only the `dist/` directory is
+# fetched at runtime -- shipping just those shaves ~30 MB off
+# the VSIX vs. including the full npm package.
+!node_modules/mermaid/dist/**
+!node_modules/mermaid/package.json
+!node_modules/svg-pan-zoom/dist/**
+!node_modules/svg-pan-zoom/package.json
+
+# `server/` is the bundled-binary drop directory.  The README
+# explaining the layout is shipped; the actual binary is staged
+# at package time by CI or scripts/package-platform.sh.
+!server/**

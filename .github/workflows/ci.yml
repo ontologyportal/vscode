@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  compile:
+    name: compile / ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check + compile
+        run: npm run compile
+
+      - name: Package (without bundled server -- smoke only)
+        # Verifies the VSIX assembles cleanly with an empty
+        # server/ dir; the extension's resolver falls back to
+        # PATH lookup at activation time in that mode.  Don't
+        # pass `--no-dependencies` -- vsce needs node_modules/
+        # filtered by .vscodeignore to include runtime deps.
+        run: npx --no vsce package --pre-release
