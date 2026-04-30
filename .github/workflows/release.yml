@@ -34,6 +34,11 @@ on:
         description: 'sigmakee version to bundle (e.g. 1.0.0). Leave empty for latest.'
         required: false
         default: ''
+      publish_marketplace:
+        description: 'Also publish the built VSIXs to the VS Code Marketplace.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write  # create / upload release assets
@@ -188,3 +193,77 @@ jobs:
           files: '*.vsix'
           draft: false
           generate_release_notes: true
+
+  # -----------------------------------------------------------------------
+  # Publish each platform-specific VSIX to the VS Code Marketplace.
+  #
+  # Runs once after every platform has built so a partial-publish (one
+  # platform succeeded, another failed mid-matrix) can't leave the
+  # Marketplace in an inconsistent state.  Triggered automatically on
+  # tag pushes, and opt-in for `workflow_dispatch` via the
+  # `publish_marketplace` input -- no surprise publishes from manual
+  # test builds.
+  #
+  # Requires a repository secret `VSCE_PAT` containing a Personal
+  # Access Token from Azure DevOps with the `Marketplace > Manage`
+  # scope.  See:
+  #   https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token
+  #
+  # The VSIXs are published as-is (already platform-targeted via
+  # `vsce package --target`); `vsce publish --packagePath` skips the
+  # repackage step and uploads the artefact verbatim.
+  # -----------------------------------------------------------------------
+  publish-marketplace:
+    name: Publish to VS Code Marketplace
+    needs: build
+    if: ${{ startsWith(github.ref, 'refs/tags/') || inputs.publish_marketplace }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify VSCE_PAT is configured
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [[ -z "${VSCE_PAT}" ]]; then
+            echo "::error::Repository secret VSCE_PAT is not set."
+            echo "Create a PAT at https://dev.azure.com/<org>/_usersSettings/tokens"
+            echo "with Marketplace > Manage scope, then add it as VSCE_PAT in"
+            echo "repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Download all platform VSIXs
+        uses: actions/download-artifact@v4
+        with:
+          path: vsixes
+          pattern: vsix-*
+          merge-multiple: true
+
+      - name: Publish each VSIX to the Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        # vsce publishes one platform-specific package per call.  We
+        # publish all three; the Marketplace dedupes by version+target
+        # so a re-run of a tag is a no-op rather than an error.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          vsixes=(vsixes/*.vsix)
+          if [[ ${#vsixes[@]} -eq 0 ]]; then
+            echo "::error::No VSIX artifacts were downloaded."
+            exit 1
+          fi
+          for vsix in "${vsixes[@]}"; do
+            echo "::group::Publishing ${vsix}"
+            npx --no vsce publish --pat "${VSCE_PAT}" --packagePath "${vsix}"
+            echo "::endgroup::"
+          done
